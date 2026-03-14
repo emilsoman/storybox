@@ -125,7 +125,7 @@ export function useNarratorAgent(
         config: {
           responseModalities: [Modality.AUDIO],
           enableAffectiveDialog: true,
-          proactivity: { proactiveAudio: true },
+          proactivity: { proactiveAudio: false },
           systemInstruction: buildNarratorSystemInstruction(
             storyConfig.shortPlot,
           ),
@@ -158,15 +158,14 @@ export function useNarratorAgent(
       })
       .then((session) => {
         sessionRef.current = session
-        const message = "start"
-        sendTurn(message)
+        sendTurn("start")
       })
       .catch((err) => {
         const message = err instanceof Error ? err.message : "Failed to connect"
         setError(message)
         setConnectionState("disconnected")
       })
-  }, [connectionState, fetcher.state, fetcher.data, disconnect, storyConfig])
+  }, [fetcher.state, fetcher.data, disconnect, storyConfig])
 
   const sendTurn = useCallback((text: string) => {
     const session = sessionRef.current
