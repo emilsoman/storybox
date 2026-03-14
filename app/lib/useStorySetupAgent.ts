@@ -8,6 +8,7 @@ import {
 } from "@google/genai/web"
 import { initializeAudio, stopPlayback } from "~/lib/audio-utils"
 import type {
+  CharacterDetails,
   ConnectionState,
   Session,
   StoryConfig,
@@ -255,7 +256,44 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
               }),
             })
             if (!res.ok) throw new Error("Prepare story failed")
-            const data = (await res.json()) as StoryConfig
+            const data = (await res.json()) as StoryConfig & {
+              characters?: unknown
+              illustrationStyle?: string
+            }
+            const rawChars = Array.isArray(data.characters)
+              ? data.characters
+              : []
+            const characters: CharacterDetails[] = rawChars
+              .filter(
+                (c): c is CharacterDetails =>
+                  c != null &&
+                  typeof c === "object" &&
+                  "name" in c &&
+                  typeof (c as CharacterDetails).name === "string",
+              )
+              .map((c) => ({
+                name: (c as CharacterDetails).name.trim(),
+                age:
+                  typeof (c as CharacterDetails).age === "string"
+                    ? (c as CharacterDetails).age?.trim()
+                    : undefined,
+                hair:
+                  typeof (c as CharacterDetails).hair === "string"
+                    ? (c as CharacterDetails).hair?.trim()
+                    : undefined,
+                eyes:
+                  typeof (c as CharacterDetails).eyes === "string"
+                    ? (c as CharacterDetails).eyes?.trim()
+                    : undefined,
+                clothing:
+                  typeof (c as CharacterDetails).clothing === "string"
+                    ? (c as CharacterDetails).clothing?.trim()
+                    : undefined,
+                style:
+                  typeof (c as CharacterDetails).style === "string"
+                    ? (c as CharacterDetails).style?.trim()
+                    : undefined,
+              }))
             prepareResult = {
               shortPlot: data.shortPlot ?? "",
               lucideIconNames: Array.isArray(data.lucideIconNames)
@@ -265,6 +303,12 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
                 : [],
               voiceName:
                 typeof data.voiceName === "string" ? data.voiceName : "Zephyr",
+              characters: characters.length > 0 ? characters : undefined,
+              illustrationStyle:
+                typeof data.illustrationStyle === "string" &&
+                data.illustrationStyle.trim()
+                  ? data.illustrationStyle.trim()
+                  : undefined,
               ...(typeof data.coverImageBase64 === "string" &&
                 data.coverImageBase64 && {
                   coverImageBase64: data.coverImageBase64,

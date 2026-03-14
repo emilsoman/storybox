@@ -7,12 +7,17 @@ import {
 } from "@google/genai/web"
 import { initializeAudio, stopPlayback } from "~/lib/audio-utils"
 import type {
+  CharacterDetails,
   ConnectionState,
   PageContent,
   Session,
   StoryConfig,
   TranscriptEntry,
   UseNarratorAgentReturn,
+} from "~/lib/gemini-live.types"
+import {
+  buildIllustrationStylePrefix,
+  DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
 } from "~/lib/gemini-live.types"
 import { buildNarratorSystemInstruction, MODEL } from "~/lib/story-agent-config"
 import {
@@ -32,6 +37,27 @@ function pageFromStoryConfig(config: StoryConfig | null): PageContent {
   }
 }
 
+function mergeCharacterUpdates(
+  prev: CharacterDetails[],
+  updates: CharacterDetails[],
+): CharacterDetails[] {
+  const byName = new Map(prev.map((c) => [c.name, { ...c }]))
+  for (const u of updates) {
+    if (!u.name?.trim()) continue
+    const existing = byName.get(u.name)
+    if (existing) {
+      if (u.age !== undefined) existing.age = u.age
+      if (u.hair !== undefined) existing.hair = u.hair
+      if (u.eyes !== undefined) existing.eyes = u.eyes
+      if (u.clothing !== undefined) existing.clothing = u.clothing
+      if (u.style !== undefined) existing.style = u.style
+    } else {
+      byName.set(u.name, { ...u })
+    }
+  }
+  return Array.from(byName.values())
+}
+
 export function useNarratorAgent(
   storyConfig: StoryConfig | null,
 ): UseNarratorAgentReturn {
@@ -44,10 +70,22 @@ export function useNarratorAgent(
   )
   const [nextPage, setNextPage] = useState<PageContent | null>(null)
   const [nextPageReady, setNextPageReady] = useState(false)
+  const [currentCharacters, setCurrentCharacters] = useState<
+    CharacterDetails[]
+  >(() => storyConfig?.characters ?? [])
+  const [currentIllustrationStyle, setCurrentIllustrationStyle] = useState(
+    () =>
+      storyConfig?.illustrationStyle?.trim() ||
+      DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
+  )
 
   const sessionRef = useRef<Session | null>(null)
   const currentPageRef = useRef(currentPage)
   currentPageRef.current = currentPage
+  const currentCharactersRef = useRef(currentCharacters)
+  currentCharactersRef.current = currentCharacters
+  const currentIllustrationStyleRef = useRef(currentIllustrationStyle)
+  currentIllustrationStyleRef.current = currentIllustrationStyle
   const queueRef = useRef<LiveServerMessage[]>([])
   const audioPartsRef = useRef<string[]>([])
   const mimeTypeRef = useRef<string>("audio/pcm;rate=24000")
@@ -109,6 +147,19 @@ export function useNarratorAgent(
       setCurrentPage(pageFromStoryConfig(storyConfig))
     }
   }, [storyConfig, currentPage.shortPlot, nextPage])
+
+  useEffect(() => {
+    if (!storyConfig) return
+    if (storyConfig.characters?.length && currentCharacters.length === 0) {
+      setCurrentCharacters(storyConfig.characters)
+    }
+    if (
+      storyConfig.illustrationStyle?.trim() &&
+      currentIllustrationStyle === DEFAULT_GLOBAL_ILLUSTRATION_STYLE
+    ) {
+      setCurrentIllustrationStyle(storyConfig.illustrationStyle.trim())
+    }
+  }, [storyConfig, currentCharacters.length, currentIllustrationStyle])
 
   useEffect(() => {
     if (
@@ -247,6 +298,8 @@ export function useNarratorAgent(
         body: JSON.stringify({
           transcript: transcriptForApi,
           currentShortPlot: pageToUse.shortPlot,
+          characters: currentCharactersRef.current,
+          illustrationStyle: currentIllustrationStyleRef.current,
         }),
       })
         .then((res) =>
@@ -259,6 +312,7 @@ export function useNarratorAgent(
             nextShortPlot?: string
             nextCoverImageBase64?: string
             nextCoverImageMimeType?: string
+            characterUpdates?: CharacterDetails[]
           }) => {
             if (!mountedRef.current) return
             const shortPlot =
@@ -276,6 +330,27 @@ export function useNarratorAgent(
                     : undefined,
               })
               setNextPageReady(true)
+            }
+            const updates = Array.isArray(data.characterUpdates)
+              ? data.characterUpdates.filter(
+                  (c): c is CharacterDetails =>
+                    c != null &&
+                    typeof c === "object" &&
+                    "name" in c &&
+                    typeof (c as CharacterDetails).name === "string",
+                )
+              : []
+            if (updates.length > 0) {
+              const merged = mergeCharacterUpdates(
+                currentCharactersRef.current,
+                updates,
+              )
+              const newStyle = buildIllustrationStylePrefix(
+                merged,
+                DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
+              )
+              setCurrentCharacters(merged)
+              setCurrentIllustrationStyle(newStyle)
             }
           },
         )

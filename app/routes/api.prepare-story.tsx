@@ -1,4 +1,10 @@
 import type { Route } from "./+types/api.prepare-story"
+import type { CharacterDetails } from "~/lib/gemini-live.types"
+import {
+  buildIllustrationPrompt,
+  buildIllustrationStylePrefix,
+  DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
+} from "~/lib/gemini-live.types"
 
 const PREPARE_STORY_MODEL = "gemini-2.0-flash"
 const IMAGE_MODEL = "gemini-2.5-flash-image"
@@ -9,11 +15,12 @@ const VALID_VOICE_NAMES_LIST = VOICE_NAMES_WITH_TONES.split(", ")
   .map((s) => s.split(" -- ")[0].trim())
   .join(", ")
 
-const PREPARE_STORY_PROMPT = `You are preparing a kids' storybook session. Given the story setup below, output a JSON object with exactly these three keys (no other text, no markdown code fence):
+const PREPARE_STORY_PROMPT = `You are preparing a kids' storybook session. Given the story setup below, output a JSON object with exactly these four keys (no other text, no markdown code fence):
 
 1. "shortPlot": A short plot summary in 2-4 sentences that a narrator will use as the story outline.
 2. "lucideIconNames": An array of 3-5 Lucide icon names in PascalCase that fit the story (e.g. BookOpen, Sparkles, TreePine, Castle, Sun, Moon). Use only real Lucide icon names from the lucide-react library.
 3. "voiceName": The narrator voice. You must use exactly one of these names (the first word from each option): ${VALID_VOICE_NAMES_LIST}. To choose, use the tone hints: ${VOICE_NAMES_WITH_TONES}. Example: for an excitable story use "Fenrir", not "Excitable".
+4. "characters": An array of character objects for consistent illustration. Each object must have "name" (string). Optionally include "age", "hair", "eyes", "clothing", "style" (all strings). Example: [{"name": "Luma", "age": "9", "hair": "short curly black hair", "eyes": "large green eyes", "clothing": "yellow raincoat, red boots", "style": "soft watercolor children's book illustration"}]. Use an empty array [] if there are no specific characters.
 
 Output only the JSON object, nothing else.`
 
@@ -21,10 +28,26 @@ const VALID_VOICE_NAMES = new Set(
   VOICE_NAMES_WITH_TONES.split(", ").map((s) => s.split(" -- ")[0].trim()),
 )
 
+function parseCharacterDetails(raw: unknown): CharacterDetails | null {
+  if (!raw || typeof raw !== "object" || !("name" in raw)) return null
+  const o = raw as Record<string, unknown>
+  const name = typeof o.name === "string" ? o.name.trim() : ""
+  if (!name) return null
+  return {
+    name,
+    age: typeof o.age === "string" ? o.age.trim() : undefined,
+    hair: typeof o.hair === "string" ? o.hair.trim() : undefined,
+    eyes: typeof o.eyes === "string" ? o.eyes.trim() : undefined,
+    clothing: typeof o.clothing === "string" ? o.clothing.trim() : undefined,
+    style: typeof o.style === "string" ? o.style.trim() : undefined,
+  }
+}
+
 function parsePrepareStoryResponse(text: string): {
   shortPlot: string
   lucideIconNames: string[]
   voiceName: string
+  characters: CharacterDetails[]
 } | null {
   console.log("prepare story response text", text)
   const trimmed = text
@@ -38,7 +61,8 @@ function parsePrepareStoryResponse(text: string): {
       typeof parsed === "object" &&
       "shortPlot" in parsed &&
       "lucideIconNames" in parsed &&
-      "voiceName" in parsed
+      "voiceName" in parsed &&
+      "characters" in parsed
     ) {
       console.log("voice is", parsed.voiceName)
       const shortPlot =
@@ -53,7 +77,13 @@ function parsePrepareStoryResponse(text: string): {
       if (!VALID_VOICE_NAMES.has(voiceName)) {
         voiceName = "Zephyr"
       }
-      return { shortPlot, lucideIconNames, voiceName }
+      const rawChars = (parsed as { characters: unknown }).characters
+      const characters = Array.isArray(rawChars)
+        ? rawChars
+            .map(parseCharacterDetails)
+            .filter((c): c is CharacterDetails => c !== null)
+        : []
+      return { shortPlot, lucideIconNames, voiceName, characters }
     }
   } catch {
     // ignore
@@ -107,15 +137,29 @@ ${transcript ? `\nConversation transcript (for context):\n${transcript}` : ""}`
           shortPlot: "",
           lucideIconNames: [],
           voiceName: "Zephyr",
+          characters: [],
+          illustrationStyle: DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
         },
         { status: 200 },
       )
     }
 
+    const illustrationStyle =
+      result.characters.length > 0
+        ? buildIllustrationStylePrefix(
+            result.characters,
+            DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
+          )
+        : DEFAULT_GLOBAL_ILLUSTRATION_STYLE
+    const imagePromptFull = buildIllustrationPrompt(
+      illustrationStyle,
+      result.shortPlot,
+    )
+    const imagePrompt = `Create a single children's storybook cover illustration. No text or words in the image. ${imagePromptFull}`
+
     let coverImageBase64: string | undefined
     let coverImageMimeType: string | undefined
     try {
-      const imagePrompt = `Create a single children's storybook cover illustration. Style: whimsical, colorful, friendly, suitable for kids. The image should capture the mood and main idea of this story—no text or words in the image. Story: ${result.shortPlot}`
       const imageResponse = await client.models.generateContent({
         model: IMAGE_MODEL,
         contents: imagePrompt,
@@ -140,7 +184,11 @@ ${transcript ? `\nConversation transcript (for context):\n${transcript}` : ""}`
     }
 
     return Response.json({
-      ...result,
+      shortPlot: result.shortPlot,
+      lucideIconNames: result.lucideIconNames,
+      voiceName: result.voiceName,
+      characters: result.characters,
+      illustrationStyle,
       ...(coverImageBase64 && {
         coverImageBase64,
         coverImageMimeType: coverImageMimeType ?? "image/png",
