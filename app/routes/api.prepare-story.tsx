@@ -2,18 +2,22 @@ import type { Route } from "./+types/api.prepare-story"
 
 const PREPARE_STORY_MODEL = "gemini-2.0-flash"
 
-const VOICE_NAMES = `Puck -- Upbeat, Charon -- Informative, Kore -- Firm, Fenrir -- Excitable, Leda -- Youthful, Orus -- Firm, Aoede -- Breezy, Callirrhoe -- Easy-going, Autonoe -- Bright, Enceladus -- Breathy, Iapetus -- Clear, Umbriel -- Easy-going, Algieba -- Smooth, Despina -- Smooth, Erinome -- Clear, Algenib -- Gravelly, Rasalgethi -- Informative, Laomedeia -- Upbeat, Achernar -- Soft, Alnilam -- Firm, Schedar -- Even, Gacrux -- Mature, Pulcherrima -- Forward, Achird -- Friendly, Zubenelgenubi -- Casual, Vindemiatrix -- Gentle, Sadachbia -- Lively, Sadaltager -- Knowledgeable, Sulafat -- Warm`
+const VOICE_NAMES_WITH_TONES = `Puck -- Upbeat, Charon -- Informative, Kore -- Firm, Fenrir -- Excitable, Leda -- Youthful, Orus -- Firm, Aoede -- Breezy, Callirrhoe -- Easy-going, Autonoe -- Bright, Enceladus -- Breathy, Iapetus -- Clear, Umbriel -- Easy-going, Algieba -- Smooth, Despina -- Smooth, Erinome -- Clear, Algenib -- Gravelly, Rasalgethi -- Informative, Laomedeia -- Upbeat, Achernar -- Soft, Alnilam -- Firm, Schedar -- Even, Gacrux -- Mature, Pulcherrima -- Forward, Achird -- Friendly, Zubenelgenubi -- Casual, Vindemiatrix -- Gentle, Sadachbia -- Lively, Sadaltager -- Knowledgeable, Sulafat -- Warm`
+
+const VALID_VOICE_NAMES_LIST = VOICE_NAMES_WITH_TONES.split(", ")
+  .map((s) => s.split(" -- ")[0].trim())
+  .join(", ")
 
 const PREPARE_STORY_PROMPT = `You are preparing a kids' storybook session. Given the story setup below, output a JSON object with exactly these three keys (no other text, no markdown code fence):
 
 1. "shortPlot": A short plot summary in 2-4 sentences that a narrator will use as the story outline.
 2. "lucideIconNames": An array of 3-5 Lucide icon names in PascalCase that fit the story (e.g. BookOpen, Sparkles, TreePine, Castle, Sun, Moon). Use only real Lucide icon names from the lucide-react library.
-3. "voiceName": Exactly one voice name from this list (pick the one that best fits the story tone): ${VOICE_NAMES}. Just select the name, don't include "-- <tone>" in the name.
+3. "voiceName": The narrator voice. You must use exactly one of these names (the first word from each option): ${VALID_VOICE_NAMES_LIST}. To choose, use the tone hints: ${VOICE_NAMES_WITH_TONES}. Example: for an excitable story use "Fenrir", not "Excitable".
 
 Output only the JSON object, nothing else.`
 
 const VALID_VOICE_NAMES = new Set(
-  VOICE_NAMES.split(", ").map((s) => s.split(" -- ")[0].trim()),
+  VOICE_NAMES_WITH_TONES.split(", ").map((s) => s.split(" -- ")[0].trim()),
 )
 
 function parsePrepareStoryResponse(text: string): {

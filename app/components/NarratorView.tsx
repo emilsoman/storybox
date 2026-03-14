@@ -62,18 +62,12 @@ export function NarratorView({
   sendTurn,
 }: { storyConfig: StoryConfig } & UseNarratorAgentReturn) {
   const [inputText, setInputText] = useState("")
-  const hasAutoConnectedRef = useRef(false)
+  const connectRef = useRef(connect)
+  connectRef.current = connect
 
   useEffect(() => {
-    if (
-      storyConfig &&
-      connectionState === "disconnected" &&
-      !hasAutoConnectedRef.current
-    ) {
-      hasAutoConnectedRef.current = true
-      connect()
-    }
-  }, [storyConfig, connectionState, connect])
+    connectRef.current()
+  }, [])
 
   const handleConnect = () => {
     if (connectionState === "connected") {

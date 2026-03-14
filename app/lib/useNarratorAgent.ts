@@ -37,8 +37,11 @@ export function useNarratorAgent(
   const handleTurnNarratorRef = useRef<(() => Promise<void>) | null>(null)
   const isHandlingTurnRef = useRef(false)
   const pendingConnectRef = useRef(false)
+  const mountedRef = useRef(true)
 
   const fetcher = useFetcher<{ token?: string; error?: string }>()
+  const fetcherRef = useRef(fetcher)
+  fetcherRef.current = fetcher
 
   const disconnect = useCallback(() => {
     sessionRef.current?.close()
@@ -57,6 +60,7 @@ export function useNarratorAgent(
       setError("No story config; complete setup first.")
       return
     }
+    if (pendingConnectRef.current || sessionRef.current) return
     setError(null)
     setConnectionState("connecting")
     try {
@@ -67,11 +71,17 @@ export function useNarratorAgent(
       return
     }
     pendingConnectRef.current = true
-    fetcher.submit({}, { method: "POST", action: "/api/gemini-token" })
-  }, [fetcher, storyConfig])
+    fetcherRef.current.submit({}, { method: "POST", action: "/api/gemini-token" })
+  }, [storyConfig])
 
   useEffect(() => {
-    console.log("use effect called")
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  useEffect(() => {
     if (
       !storyConfig ||
       !pendingConnectRef.current ||
@@ -144,24 +154,32 @@ export function useNarratorAgent(
         },
         callbacks: {
           onopen: () => {
-            setConnectionState("connected")
+            if (mountedRef.current) setConnectionState("connected")
           },
           onmessage: (message: LiveServerMessage) => {
             queueRef.current.push(message)
           },
           onerror: (e: ErrorEvent) => {
-            setError(e?.message ?? "Connection error")
+            if (mountedRef.current) {
+              setError(e?.message ?? "Connection error")
+              disconnect()
+            }
           },
           onclose: () => {
-            disconnect()
+            if (mountedRef.current) disconnect()
           },
         },
       })
       .then((session) => {
+        if (!mountedRef.current) {
+          session.close()
+          return
+        }
         sessionRef.current = session
         sendTurn("start")
       })
       .catch((err) => {
+        if (!mountedRef.current) return
         const message = err instanceof Error ? err.message : "Failed to connect"
         setError(message)
         setConnectionState("disconnected")
