@@ -90,7 +90,7 @@ export function VoiceChat() {
         {transcript && (
           <div className="rounded-lg border border-border bg-muted/30 p-4">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
-              Your story so far
+              Transcript
             </p>
             <p className="text-sm whitespace-pre-wrap">{transcript}</p>
           </div>

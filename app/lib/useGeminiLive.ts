@@ -13,14 +13,14 @@ const MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 
 const STORY_SETUP_SYSTEM_INSTRUCTION = `You are a friendly story co-creator helping someone set up a kids' storybook. Your job is to collect a clear "story thread": who the characters are, where the story takes place, the tone (e.g. funny, gentle, adventurous), and any plot ideas they have.
 
-Keep your replies short and conversational so they work well when spoken aloud. Ask one or two questions at a time. Start by greeting them and asking about the main character or the kind of story they want. If they share a lot at once, acknowledge it and ask a follow-up to fill in missing pieces (setting, other characters, tone). When they seem done or say they're finished, briefly summarize the story thread so we have a clear picture for the next step.`
+Keep your replies short and conversational so they work well when spoken aloud. Ask one or two questions at a time. Start by greeting them and asking about the main character or the kind of story they want. If they share a lot at once, acknowledge it and ask a follow-up to fill in missing pieces (setting, other characters, tone).`
 
 export type ConnectionState = "disconnected" | "connecting" | "connected"
 
 export type UseGeminiLiveReturn = {
   connectionState: ConnectionState
   error: string | null
-  /** Combined transcript: "You: …" and "Story setup: …" lines from input/output transcription */
+  /** Literal transcript: "You: …" and "Agent: …" from input/output audio transcription only */
   transcript: string
   connect: () => void
   disconnect: () => void
@@ -123,22 +123,22 @@ export function useGeminiLive(): UseGeminiLiveReturn {
       if (content.interrupted) {
         clearPlaybackBuffer()
       }
+      // Literal transcript of what the agent actually spoke (audio transcription only)
       if (content.outputTranscription?.text) {
         setTranscriptLines((prev) => [
           ...prev,
-          `Story setup: ${content.outputTranscription!.text}`,
+          `Agent: ${content.outputTranscription!.text}`,
         ])
       }
+      // Literal transcript of what the user actually said (audio transcription only)
       if (content.inputTranscription?.text) {
         setTranscriptLines((prev) => [
           ...prev,
           `You: ${content.inputTranscription!.text}`,
         ])
       }
+      // Play audio; do not add modelTurn.parts text to transcript (it's generated content, not literal speech)
       for (const part of content.modelTurn?.parts ?? []) {
-        if (part.text) {
-          setTranscriptLines((prev) => [...prev, `Story setup: ${part.text}`])
-        }
         if (part.inlineData?.data) {
           playPcm24kBase64(part.inlineData.data)
         }
