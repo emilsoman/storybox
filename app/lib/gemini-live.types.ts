@@ -11,6 +11,12 @@ export type StoryConfig = {
   coverImageMimeType?: string
 }
 
+export type PageContent = {
+  shortPlot: string
+  coverImageBase64?: string
+  coverImageMimeType?: string
+}
+
 export type UseStorySetupAgentReturn = {
   connectionState: ConnectionState
   error: string | null
@@ -28,6 +34,8 @@ export type UseNarratorAgentReturn = {
   connectionState: ConnectionState
   error: string | null
   transcript: string
+  currentPage: PageContent
+  nextPageReady: boolean
   connect: () => void
   disconnect: () => void
   sendTurn: (text: string) => void

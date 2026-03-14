@@ -4,45 +4,61 @@ import { Phone, PhoneOff, Send } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import type {
+  PageContent,
   StoryConfig,
   UseNarratorAgentReturn,
 } from "~/lib/gemini-live.types"
 
-function StoryPreparedSection({ config }: { config: StoryConfig }) {
+function CurrentPageSection({
+  currentPage,
+  storyConfig,
+  nextPageReady,
+}: {
+  currentPage: PageContent
+  storyConfig: StoryConfig
+  nextPageReady: boolean
+}) {
   const iconMap = LucideIcons as unknown as Record<
     string,
     LucideIcon | undefined
   >
   const coverImageDataUrl =
-    config.coverImageBase64 && config.coverImageMimeType
-      ? `data:${config.coverImageMimeType};base64,${config.coverImageBase64}`
+    currentPage.coverImageBase64 && currentPage.coverImageMimeType
+      ? `data:${currentPage.coverImageMimeType};base64,${currentPage.coverImageBase64}`
       : null
   return (
     <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
-      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-        Prepared story
-      </p>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+          Current page
+        </p>
+        {nextPageReady && (
+          <span className="text-xs font-medium text-primary shrink-0">
+            Next page ready
+          </span>
+        )}
+      </div>
       {coverImageDataUrl && (
         <div className="rounded-md overflow-hidden border border-border bg-muted/50">
           <img
             src={coverImageDataUrl}
-            alt="Story cover"
+            alt="Story page"
             className="w-full aspect-[4/3] object-cover"
           />
         </div>
       )}
-      {config.shortPlot && (
+      {currentPage.shortPlot && (
         <div>
           <p className="text-xs font-medium text-muted-foreground mb-1">Plot</p>
-          <p className="text-sm">{config.shortPlot}</p>
+          <p className="text-sm">{currentPage.shortPlot}</p>
         </div>
       )}
-      {config.lucideIconNames.length > 0 && (
+      {storyConfig.lucideIconNames.length > 0 && (
         <div className="flex flex-wrap gap-2 items-center">
           <p className="text-xs font-medium text-muted-foreground w-full mb-1">
             Icons
           </p>
-          {config.lucideIconNames.map((name) => {
+          {storyConfig.lucideIconNames.map((name) => {
             const Icon = iconMap[name]
             if (!Icon) return null
             return (
@@ -59,7 +75,7 @@ function StoryPreparedSection({ config }: { config: StoryConfig }) {
       )}
       <p className="text-sm">
         <span className="text-muted-foreground">Narrator voice: </span>
-        <strong>{config.voiceName}</strong>
+        <strong>{storyConfig.voiceName}</strong>
       </p>
     </div>
   )
@@ -70,6 +86,8 @@ export function NarratorView({
   connectionState,
   error,
   transcript,
+  currentPage,
+  nextPageReady,
   connect,
   disconnect,
   sendTurn,
@@ -117,7 +135,11 @@ export function NarratorView({
         </div>
       )}
 
-      <StoryPreparedSection config={storyConfig} />
+      <CurrentPageSection
+        currentPage={currentPage}
+        storyConfig={storyConfig}
+        nextPageReady={nextPageReady}
+      />
 
       <div className="flex flex-col items-center gap-4">
         <Button

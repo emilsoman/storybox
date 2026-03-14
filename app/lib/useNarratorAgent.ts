@@ -8,6 +8,7 @@ import {
 import { initializeAudio, stopPlayback } from "~/lib/audio-utils"
 import type {
   ConnectionState,
+  PageContent,
   Session,
   StoryConfig,
   TranscriptEntry,
@@ -22,6 +23,15 @@ import {
 
 export type { UseNarratorAgentReturn }
 
+function pageFromStoryConfig(config: StoryConfig | null): PageContent {
+  if (!config) return { shortPlot: "" }
+  return {
+    shortPlot: config.shortPlot,
+    coverImageBase64: config.coverImageBase64,
+    coverImageMimeType: config.coverImageMimeType,
+  }
+}
+
 export function useNarratorAgent(
   storyConfig: StoryConfig | null,
 ): UseNarratorAgentReturn {
@@ -29,8 +39,15 @@ export function useNarratorAgent(
     useState<ConnectionState>("disconnected")
   const [error, setError] = useState<string | null>(null)
   const [transcriptLines, setTranscriptLines] = useState<TranscriptEntry[]>([])
+  const [currentPage, setCurrentPage] = useState<PageContent>(() =>
+    pageFromStoryConfig(storyConfig),
+  )
+  const [nextPage, setNextPage] = useState<PageContent | null>(null)
+  const [nextPageReady, setNextPageReady] = useState(false)
 
   const sessionRef = useRef<Session | null>(null)
+  const currentPageRef = useRef(currentPage)
+  currentPageRef.current = currentPage
   const queueRef = useRef<LiveServerMessage[]>([])
   const audioPartsRef = useRef<string[]>([])
   const mimeTypeRef = useRef<string>("audio/pcm;rate=24000")
@@ -53,7 +70,10 @@ export function useNarratorAgent(
     setConnectionState("disconnected")
     setError(null)
     setTranscriptLines([])
-  }, [])
+    setNextPage(null)
+    setNextPageReady(false)
+    if (storyConfig) setCurrentPage(pageFromStoryConfig(storyConfig))
+  }, [storyConfig])
 
   const connect = useCallback(async () => {
     if (!storyConfig) {
@@ -71,7 +91,10 @@ export function useNarratorAgent(
       return
     }
     pendingConnectRef.current = true
-    fetcherRef.current.submit({}, { method: "POST", action: "/api/gemini-token" })
+    fetcherRef.current.submit(
+      {},
+      { method: "POST", action: "/api/gemini-token" },
+    )
   }, [storyConfig])
 
   useEffect(() => {
@@ -80,6 +103,12 @@ export function useNarratorAgent(
       mountedRef.current = false
     }
   }, [])
+
+  useEffect(() => {
+    if (storyConfig && currentPage.shortPlot === "" && !nextPage) {
+      setCurrentPage(pageFromStoryConfig(storyConfig))
+    }
+  }, [storyConfig, currentPage.shortPlot, nextPage])
 
   useEffect(() => {
     if (
@@ -186,22 +215,83 @@ export function useNarratorAgent(
       })
   }, [fetcher.state, fetcher.data, disconnect, storyConfig])
 
-  const sendTurn = useCallback((text: string) => {
-    const session = sessionRef.current
-    if (!session) return
-    if (isHandlingTurnRef.current) return
-    setTranscriptLines((prev) => [...prev, { role: "user", text }])
-    session.sendRealtimeInput({ text: text })
+  const sendTurn = useCallback(
+    (text: string) => {
+      const session = sessionRef.current
+      if (!session) return
+      if (isHandlingTurnRef.current) return
 
-    const handleTurnNarrator = handleTurnNarratorRef.current
-    if (!handleTurnNarrator) return
-    isHandlingTurnRef.current = true
-    handleTurnNarrator()
-      .finally(() => {
-        isHandlingTurnRef.current = false
+      const pageToUse = nextPage ?? currentPageRef.current
+      if (nextPage) {
+        setCurrentPage(nextPage)
+        setNextPage(null)
+        setNextPageReady(false)
+      }
+
+      const textToSend =
+        pageToUse.shortPlot.trim() !== ""
+          ? `Current page: ${pageToUse.shortPlot}\n\n${text}`
+          : text
+      setTranscriptLines((prev) => [...prev, { role: "user", text }])
+      session.sendRealtimeInput({ text: textToSend })
+
+      const transcriptForApi = [
+        ...transcriptLines,
+        { role: "user" as const, text },
+      ]
+        .map((e) => `${e.role === "user" ? "You" : "Agent"}: ${e.text}`)
+        .join("\n\n")
+      fetch("/api/prepare-next-page", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcript: transcriptForApi,
+          currentShortPlot: pageToUse.shortPlot,
+        }),
       })
-      .catch(() => {})
-  }, [])
+        .then((res) =>
+          res.ok
+            ? res.json()
+            : Promise.reject(new Error("Prepare next page failed")),
+        )
+        .then(
+          (data: {
+            nextShortPlot?: string
+            nextCoverImageBase64?: string
+            nextCoverImageMimeType?: string
+          }) => {
+            if (!mountedRef.current) return
+            const shortPlot =
+              typeof data.nextShortPlot === "string" ? data.nextShortPlot : ""
+            if (shortPlot) {
+              setNextPage({
+                shortPlot,
+                coverImageBase64:
+                  typeof data.nextCoverImageBase64 === "string"
+                    ? data.nextCoverImageBase64
+                    : undefined,
+                coverImageMimeType:
+                  typeof data.nextCoverImageMimeType === "string"
+                    ? data.nextCoverImageMimeType
+                    : undefined,
+              })
+              setNextPageReady(true)
+            }
+          },
+        )
+        .catch(() => {})
+
+      const handleTurnNarrator = handleTurnNarratorRef.current
+      if (!handleTurnNarrator) return
+      isHandlingTurnRef.current = true
+      handleTurnNarrator()
+        .finally(() => {
+          isHandlingTurnRef.current = false
+        })
+        .catch(() => {})
+    },
+    [nextPage, transcriptLines],
+  )
 
   const transcript = transcriptLines
     .map((e) => `${e.role === "user" ? "You" : "Agent"}: ${e.text}`)
@@ -211,6 +301,8 @@ export function useNarratorAgent(
     connectionState,
     error,
     transcript,
+    currentPage,
+    nextPageReady,
     connect,
     disconnect,
     sendTurn,
