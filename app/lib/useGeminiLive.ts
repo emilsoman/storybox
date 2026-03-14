@@ -33,11 +33,13 @@ type Session = Awaited<
   ReturnType<InstanceType<typeof GoogleGenAI>["live"]["connect"]>
 >
 
+type TranscriptEntry = { role: "user" | "agent"; text: string }
+
 export function useGeminiLive(): UseGeminiLiveReturn {
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("disconnected")
   const [error, setError] = useState<string | null>(null)
-  const [transcriptLines, setTranscriptLines] = useState<string[]>([])
+  const [transcriptLines, setTranscriptLines] = useState<TranscriptEntry[]>([])
 
   const sessionRef = useRef<Session | null>(null)
   const queueRef = useRef<LiveServerMessage[]>([])
@@ -120,11 +122,19 @@ export function useGeminiLive(): UseGeminiLiveReturn {
       }
 
       // Use outputTranscription (what was actually spoken), not modelTurn.parts text (includes thinking)
+      // Append to the same agent line so the UI updates in place instead of one line per chunk
       if (content.outputTranscription?.text) {
-        setTranscriptLines((prev) => [
-          ...prev,
-          `Agent: ${content.outputTranscription!.text}`,
-        ])
+        const chunk = content.outputTranscription.text
+        setTranscriptLines((prev) => {
+          const last = prev[prev.length - 1]
+          if (last?.role === "agent") {
+            return [
+              ...prev.slice(0, -1),
+              { role: "agent", text: last.text + chunk },
+            ]
+          }
+          return [...prev, { role: "agent", text: chunk }]
+        })
       }
 
       // Official pattern: play each audio chunk as it arrives via worklet queue (in order, continuous). See gemini-live-api-examples frontend.
@@ -180,7 +190,10 @@ export function useGeminiLive(): UseGeminiLiveReturn {
         model: MODEL,
         config: {
           responseModalities: [Modality.AUDIO],
+          enableAffectiveDialog: true,
+          proactivity: { proactiveAudio: true },
           systemInstruction: STORY_SETUP_SYSTEM_INSTRUCTION,
+          thinkingConfig: { thinkingBudget: 0 },
           speechConfig: {
             voiceConfig: {
               prebuiltVoiceConfig: { voiceName: "Zephyr" },
@@ -221,7 +234,7 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     const session = sessionRef.current
     if (!session) return
     if (isHandlingTurnRef.current) return
-    setTranscriptLines((prev) => [...prev, `You: ${text}`])
+    setTranscriptLines((prev) => [...prev, { role: "user", text }])
     session.sendClientContent({ turns: [text] })
     const handleTurn = handleTurnRef.current
     if (!handleTurn) return
@@ -233,7 +246,9 @@ export function useGeminiLive(): UseGeminiLiveReturn {
       .catch(() => {})
   }, [])
 
-  const transcript = transcriptLines.join("\n\n")
+  const transcript = transcriptLines
+    .map((e) => `${e.role === "user" ? "You" : "Agent"}: ${e.text}`)
+    .join("\n\n")
 
   return {
     connectionState,
