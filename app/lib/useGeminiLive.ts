@@ -4,6 +4,7 @@ import { GoogleGenAI, Modality } from "@google/genai/web"
 import {
   captureMic16k,
   clearPlaybackBuffer,
+  initializeAudio,
   playPcm24kBase64,
   stopPlayback,
 } from "~/lib/audio-utils"
@@ -57,9 +58,16 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     setTranscriptLines([])
   }, [])
 
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     setError(null)
     setConnectionState("connecting")
+    try {
+      await initializeAudio()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Audio init failed")
+      setConnectionState("disconnected")
+      return
+    }
     pendingConnectRef.current = true
     fetcher.submit({}, { method: "POST", action: "/api/gemini-token" })
   }, [fetcher])
@@ -99,6 +107,44 @@ export function useGeminiLive(): UseGeminiLiveReturn {
       apiKey: token,
       httpOptions: { apiVersion: "v1alpha" as const },
     })
+    function handleServerContent(
+      content:
+        | {
+            interrupted?: boolean
+            outputTranscription?: { text?: string }
+            inputTranscription?: { text?: string }
+            modelTurn?: {
+              parts?: Array<{ text?: string; inlineData?: { data?: string } }>
+            }
+          }
+        | undefined,
+    ) {
+      if (!content) return
+      if (content.interrupted) {
+        clearPlaybackBuffer()
+      }
+      if (content.outputTranscription?.text) {
+        setTranscriptLines((prev) => [
+          ...prev,
+          `Story setup: ${content.outputTranscription!.text}`,
+        ])
+      }
+      if (content.inputTranscription?.text) {
+        setTranscriptLines((prev) => [
+          ...prev,
+          `You: ${content.inputTranscription!.text}`,
+        ])
+      }
+      for (const part of content.modelTurn?.parts ?? []) {
+        if (part.text) {
+          setTranscriptLines((prev) => [...prev, `Story setup: ${part.text}`])
+        }
+        if (part.inlineData?.data) {
+          playPcm24kBase64(part.inlineData.data)
+        }
+      }
+    }
+
     ai.live
       .connect({
         model: MODEL,
@@ -112,7 +158,6 @@ export function useGeminiLive(): UseGeminiLiveReturn {
           },
           outputAudioTranscription: {},
           inputAudioTranscription: {},
-          // Long sessions: audio tokens accumulate ~25/sec; compression keeps context bounded
           contextWindowCompression: { slidingWindow: {} },
         },
         callbacks: {
@@ -120,48 +165,9 @@ export function useGeminiLive(): UseGeminiLiveReturn {
             setConnectionState("connected")
           },
           onmessage: (message: {
-            serverContent?: {
-              interrupted?: boolean
-              outputTranscription?: { text?: string }
-              inputTranscription?: { text?: string }
-              modelTurn?: {
-                parts?: Array<{
-                  text?: string
-                  inlineData?: { data?: string }
-                }>
-              }
-            }
+            serverContent?: Parameters<typeof handleServerContent>[0]
           }) => {
-            const content = message.serverContent
-            if (!content) return
-            // User spoke while model was replying: discard playback buffer immediately
-            if (content.interrupted) {
-              clearPlaybackBuffer()
-            }
-            if (content.outputTranscription?.text) {
-              setTranscriptLines((prev) => [
-                ...prev,
-                `Story setup: ${content.outputTranscription!.text}`,
-              ])
-            }
-            if (content.inputTranscription?.text) {
-              setTranscriptLines((prev) => [
-                ...prev,
-                `You: ${content.inputTranscription!.text}`,
-              ])
-            }
-            const parts = content.modelTurn?.parts ?? []
-            for (const part of parts) {
-              if (part.text) {
-                setTranscriptLines((prev) => [
-                  ...prev,
-                  `Story setup: ${part.text}`,
-                ])
-              }
-              if (part.inlineData?.data) {
-                playPcm24kBase64(part.inlineData.data)
-              }
-            }
+            handleServerContent(message.serverContent)
           },
           onerror: (e: ErrorEvent) => {
             setError(e?.message ?? "Connection error")

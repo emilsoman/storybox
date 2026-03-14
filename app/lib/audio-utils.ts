@@ -1,20 +1,66 @@
 /**
- * Audio utilities for Gemini Live API:
- * - Mic capture at 16 kHz, 16-bit PCM (required by the API)
- * - Playback of 24 kHz, 16-bit PCM (returned by the API)
+ * Audio utilities for Gemini Live API (aligned with reference MediaHandler):
+ * - Mic capture: AudioWorklet → Float32 chunks → downsample to 16 kHz → Int16 → base64
+ * - Playback: 24 kHz 16-bit PCM, scheduled sources, stop-all on interrupt
  */
 
 const LIVE_INPUT_SAMPLE_RATE = 16000
 const LIVE_OUTPUT_SAMPLE_RATE = 24000
+const WORKLET_BUFFER_SIZE = 4096
 
-/** Convert Float32Array to 16-bit PCM base64 */
-function float32ToPcmBase64(float32: Float32Array): string {
-  const pcm = new Int16Array(float32.length)
-  for (let i = 0; i < float32.length; i++) {
-    const s = Math.max(-1, Math.min(1, float32[i]))
-    pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+/** Single shared context for capture and playback (reference uses one MediaHandler.audioContext) */
+let sharedAudioContext: AudioContext | null = null
+
+function getAudioContext(): AudioContext {
+  if (!sharedAudioContext) {
+    sharedAudioContext = new (
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext
+    )()
   }
-  const bytes = new Uint8Array(pcm.buffer)
+  return sharedAudioContext
+}
+
+/** Downsample Float32 buffer (reference downsampleBuffer) */
+function downsampleBuffer(
+  buffer: Float32Array,
+  sampleRate: number,
+  outSampleRate: number,
+): Float32Array {
+  if (outSampleRate === sampleRate) return buffer
+  const ratio = sampleRate / outSampleRate
+  const newLength = Math.round(buffer.length / ratio)
+  const result = new Float32Array(newLength)
+  let offsetResult = 0
+  let offsetBuffer = 0
+  while (offsetResult < result.length) {
+    const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio)
+    let accum = 0,
+      count = 0
+    for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+      accum += buffer[i]
+      count++
+    }
+    result[offsetResult] = count ? accum / count : 0
+    offsetResult++
+    offsetBuffer = nextOffsetBuffer
+  }
+  return result
+}
+
+/** Float32 → Int16 (reference convertFloat32ToInt16) */
+function convertFloat32ToInt16(buffer: Float32Array): ArrayBuffer {
+  const buf = new Int16Array(buffer.length)
+  for (let i = 0; i < buffer.length; i++) {
+    buf[i] = Math.min(1, Math.max(-1, buffer[i])) * 0x7fff
+  }
+  return buf.buffer
+}
+
+/** Int16 ArrayBuffer → base64 for API */
+function int16BufferToBase64(arrayBuffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(arrayBuffer)
   let binary = ""
   for (let i = 0; i < bytes.length; i++) {
     binary += String.fromCharCode(bytes[i])
@@ -22,76 +68,55 @@ function float32ToPcmBase64(float32: Float32Array): string {
   return btoa(binary)
 }
 
-/** Convert 16-bit PCM ArrayBuffer (at any sample rate) to 16 kHz base64 for the API */
-function pcmBufferTo16kBase64(
-  pcmBuffer: ArrayBuffer,
-  fromSampleRate: number,
-): string {
-  if (fromSampleRate === LIVE_INPUT_SAMPLE_RATE) {
-    const bytes = new Uint8Array(pcmBuffer)
-    let binary = ""
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i])
-    }
-    return btoa(binary)
-  }
-  const pcm = new Int16Array(pcmBuffer)
-  const float32 = new Float32Array(pcm.length)
-  for (let i = 0; i < pcm.length; i++) {
-    float32[i] = pcm[i] / (pcm[i] < 0 ? 0x8000 : 0x7fff)
-  }
-  const resampled = resample(float32, fromSampleRate, LIVE_INPUT_SAMPLE_RATE)
-  return float32ToPcmBase64(resampled)
-}
-
-const PCM_CAPTURE_WORKLET_CODE = `
-class PCMCaptureProcessor extends AudioWorkletProcessor {
-  constructor(options) {
+/** Reference-style worklet: buffer 4096 Float32, post when full */
+const PCM_WORKLET_CODE = `
+class PCMProcessor extends AudioWorkletProcessor {
+  constructor() {
     super();
-    this.sampleRate = options.processorOptions?.sampleRate ?? 44100;
+    this.bufferSize = ${WORKLET_BUFFER_SIZE};
+    this.buffer = new Float32Array(this.bufferSize);
+    this.bufferIndex = 0;
   }
   process(inputs, outputs, params) {
-    const channel = inputs[0]?.[0];
-    if (!channel || channel.length === 0) return true;
-    const pcm = new Int16Array(channel.length);
-    for (let i = 0; i < channel.length; i++) {
-      const s = Math.max(-1, Math.min(1, channel[i]));
-      pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    const input = inputs[0];
+    if (!input || !input.length) return true;
+    const channelData = input[0];
+    for (let i = 0; i < channelData.length; i++) {
+      this.buffer[this.bufferIndex++] = channelData[i];
+      if (this.bufferIndex >= this.bufferSize) {
+        this.port.postMessage(this.buffer);
+        this.bufferIndex = 0;
+      }
     }
-    this.port.postMessage({ pcm: pcm.buffer, sampleRate: this.sampleRate }, [pcm.buffer]);
     return true;
   }
 }
-registerProcessor('pcm-capture-processor', PCMCaptureProcessor);
+registerProcessor("pcm-processor", PCMProcessor);
 `
 
-/** Resample float32 from one sample rate to another (simple linear interpolation) */
-function resample(
-  input: Float32Array,
-  fromRate: number,
-  toRate: number,
-): Float32Array {
-  if (fromRate === toRate) return input
-  const ratio = fromRate / toRate
-  const outLength = Math.floor(input.length / ratio)
-  const output = new Float32Array(outLength)
-  for (let i = 0; i < outLength; i++) {
-    const srcIndex = i * ratio
-    const index = Math.floor(srcIndex)
-    const frac = srcIndex - index
-    const next = Math.min(index + 1, input.length - 1)
-    output[i] = input[index] * (1 - frac) + input[next] * frac
-  }
-  return output
-}
+/** Scheduled playback sources (reference: scheduledSources, stopAudioPlayback) */
+const scheduledSources: AudioBufferSourceNode[] = []
+let nextStartTime = 0
 
 export type MicCapture = {
   stop: () => void
 }
 
 /**
- * Capture microphone at 16 kHz, 16-bit PCM and call onChunk with base64 data.
- * Uses AudioWorklet (128-sample buffer) for low latency and stable timing; resamples to 16 kHz on the main thread when context rate differs.
+ * Initialize shared AudioContext (call on user gesture before capture/playback).
+ * Reference: mediaHandler.initializeAudio() before connect.
+ */
+export function initializeAudio(): Promise<void> {
+  const ctx = getAudioContext()
+  if (ctx.state === "suspended") {
+    return ctx.resume()
+  }
+  return Promise.resolve()
+}
+
+/**
+ * Capture microphone at 16 kHz, 16-bit PCM; call onChunk with base64.
+ * Worklet posts Float32; we downsample to 16 kHz and convert to Int16 (reference flow).
  */
 export function captureMic16k(
   onChunk: (base64Pcm: string) => void,
@@ -105,138 +130,118 @@ export function captureMic16k(
       return
     }
 
-    const preferredRate = LIVE_INPUT_SAMPLE_RATE
-    const ctx = new AudioContext({ sampleRate: preferredRate })
-    const source = ctx.createMediaStreamSource(stream)
-
+    const ctx = getAudioContext()
     try {
-      const blob = new Blob([PCM_CAPTURE_WORKLET_CODE], {
+      if (ctx.state === "suspended") await ctx.resume()
+      const blob = new Blob([PCM_WORKLET_CODE], {
         type: "application/javascript",
       })
       const workletUrl = URL.createObjectURL(blob)
       await ctx.audioWorklet.addModule(workletUrl)
       URL.revokeObjectURL(workletUrl)
     } catch (e) {
-      ctx.close()
       stream.getTracks().forEach((t) => t.stop())
       reject(new Error("Failed to load audio worklet"))
       return
     }
 
-    const workletNode = new AudioWorkletNode(ctx, "pcm-capture-processor", {
-      processorOptions: { sampleRate: ctx.sampleRate },
-      numberOfInputs: 1,
-      numberOfOutputs: 1,
-    })
+    const source = ctx.createMediaStreamSource(stream)
+    const workletNode = new AudioWorkletNode(ctx, "pcm-processor")
 
-    workletNode.port.onmessage = (
-      e: MessageEvent<{ pcm: ArrayBuffer; sampleRate: number }>,
-    ) => {
-      const base64 = pcmBufferTo16kBase64(e.data.pcm, e.data.sampleRate)
-      onChunk(base64)
+    workletNode.port.onmessage = (event: MessageEvent<Float32Array>) => {
+      const downsampled = downsampleBuffer(
+        event.data,
+        ctx.sampleRate,
+        LIVE_INPUT_SAMPLE_RATE,
+      )
+      const pcm16 = convertFloat32ToInt16(downsampled)
+      onChunk(int16BufferToBase64(pcm16))
     }
 
-    const silentGain = ctx.createGain()
-    silentGain.gain.value = 0
-    silentGain.connect(ctx.destination)
-
     source.connect(workletNode)
-    workletNode.connect(silentGain)
+    const muteGain = ctx.createGain()
+    muteGain.gain.value = 0
+    workletNode.connect(muteGain)
+    muteGain.connect(ctx.destination)
 
     resolve({
       stop: () => {
         workletNode.disconnect()
         source.disconnect()
-        silentGain.disconnect()
-        ctx.close()
+        muteGain.disconnect()
         stream.getTracks().forEach((t) => t.stop())
       },
     })
   })
 }
 
-/** Queue and play 24 kHz 16-bit PCM chunks (API output) */
-let playbackContext: AudioContext | null = null
-const playbackQueue: ArrayBuffer[] = []
-let isPlaying = false
-/** Scheduled start time for the next chunk (gapless playback) */
-let nextStartTime = 0
-/** Current playback source; kept so we can stop it immediately on interruption */
-let currentPlaybackSource: AudioBufferSourceNode | null = null
-
-function getPlaybackContext(): AudioContext {
-  if (!playbackContext) {
-    playbackContext = new AudioContext({ sampleRate: LIVE_OUTPUT_SAMPLE_RATE })
-  }
-  return playbackContext
-}
-
-function playNextInQueue() {
-  if (isPlaying || playbackQueue.length === 0) return
-  isPlaying = true
-  const chunk = playbackQueue.shift()!
-  const ctx = getPlaybackContext()
-  const pcm = new Int16Array(chunk)
-  const float32 = new Float32Array(pcm.length)
-  for (let i = 0; i < pcm.length; i++) {
-    float32[i] = pcm[i] / (pcm[i] < 0 ? 0x8000 : 0x7fff)
-  }
-  const buffer = ctx.createBuffer(1, float32.length, LIVE_OUTPUT_SAMPLE_RATE)
-  buffer.copyToChannel(float32, 0)
-  const source = ctx.createBufferSource()
-  currentPlaybackSource = source
-  source.buffer = buffer
-  source.connect(ctx.destination)
-  if (nextStartTime <= ctx.currentTime) {
-    nextStartTime = ctx.currentTime
-  }
-  const startWhen = nextStartTime
-  nextStartTime += buffer.duration
-  source.onended = () => {
-    currentPlaybackSource = null
-    isPlaying = false
-    playNextInQueue()
-  }
-  source.start(startWhen)
-}
-
 /**
- * Decode base64 PCM (24 kHz, 16-bit, mono) from the Live API and queue for playback.
+ * Play 24 kHz 16-bit PCM from API (reference playAudio).
+ * Schedules at nextStartTime for gapless playback; no queue.
  */
 export function playPcm24kBase64(base64: string): void {
+  const ctx = getAudioContext()
+  if (ctx.state === "suspended") ctx.resume()
+
   const binary = atob(base64)
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i)
   }
-  playbackQueue.push(bytes.buffer)
-  playNextInQueue()
+  const pcmData = new Int16Array(bytes.buffer)
+  const float32Data = new Float32Array(pcmData.length)
+  for (let i = 0; i < pcmData.length; i++) {
+    float32Data[i] = pcmData[i] / 32768.0
+  }
+
+  const buffer = ctx.createBuffer(
+    1,
+    float32Data.length,
+    LIVE_OUTPUT_SAMPLE_RATE,
+  )
+  buffer.getChannelData(0).set(float32Data)
+
+  const source = ctx.createBufferSource()
+  source.buffer = buffer
+  source.connect(ctx.destination)
+
+  const now = ctx.currentTime
+  nextStartTime = Math.max(now, nextStartTime)
+  source.start(nextStartTime)
+  nextStartTime += buffer.duration
+
+  scheduledSources.push(source)
+  source.onended = () => {
+    const idx = scheduledSources.indexOf(source)
+    if (idx > -1) scheduledSources.splice(idx, 1)
+  }
 }
 
 /**
- * Clear the playback queue and stop current playback immediately.
- * Call this when the server sends server_content with interrupted: true
- * so the agent does not continue talking over the user.
+ * Stop all playback immediately (reference stopAudioPlayback).
+ * Call when server sends interrupted so the model doesn’t talk over the user.
  */
 export function clearPlaybackBuffer(): void {
-  playbackQueue.length = 0
-  nextStartTime = 0
-  if (currentPlaybackSource) {
+  scheduledSources.forEach((s) => {
     try {
-      currentPlaybackSource.stop()
+      s.stop()
     } catch {
-      // already stopped
+      /* already stopped */
     }
-    currentPlaybackSource = null
+  })
+  scheduledSources.length = 0
+  const ctx = sharedAudioContext
+  if (ctx) {
+    nextStartTime = ctx.currentTime
   }
-  isPlaying = false
 }
 
+/** Disconnect and close shared context (e.g. on session end). */
 export function stopPlayback(): void {
   clearPlaybackBuffer()
   nextStartTime = 0
-  if (playbackContext) {
-    playbackContext.close()
-    playbackContext = null
+  if (sharedAudioContext) {
+    sharedAudioContext.close()
+    sharedAudioContext = null
   }
 }
