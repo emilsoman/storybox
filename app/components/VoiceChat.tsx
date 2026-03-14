@@ -11,6 +11,7 @@ export function VoiceChat() {
     error,
     transcript,
     storySetup,
+    storyStarted,
     connect,
     disconnect,
     sendTurn,
@@ -97,6 +98,12 @@ export function VoiceChat() {
             </div>
           )}
         </div>
+
+        {storyStarted && (
+          <div className="rounded-lg border border-green-500/50 bg-green-500/10 px-4 py-3 text-sm text-green-700 dark:text-green-400">
+            Story started!
+          </div>
+        )}
 
         {storySetup != null && storySetup !== "" && (
           <div className="rounded-lg border border-border bg-muted/30 p-4">

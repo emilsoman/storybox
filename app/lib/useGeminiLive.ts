@@ -4,6 +4,8 @@ import {
   GoogleGenAI,
   type LiveServerMessage,
   Modality,
+  Behavior,
+  FunctionResponseScheduling,
 } from "@google/genai/web"
 import {
   clearPlaybackBuffer,
@@ -25,7 +27,16 @@ Keep your replies short and conversational so they work well when spoken aloud.
 When starting, greet the user and ask them for the story setup unless one is provided already.
 Be warm and friendly, but concise.
 You don't need to ask follow ups.
+
+When you have collected enough story setup (characters, setting, tone, plot ideas), call the start_story tool to begin the story. While the tool is running, speak for about 10 seconds to build anticipation—talk to the audience to get them excited for the story that's about to start.
 `
+
+const START_STORY_TOOL = {
+  name: "start_story",
+  description:
+    "Call this when the story setup is complete to start the story. The app will prepare; you should keep talking for about 10 seconds to build anticipation.",
+  behavior: Behavior.NON_BLOCKING,
+} as const
 
 export type ConnectionState = "disconnected" | "connecting" | "connected"
 
@@ -34,6 +45,7 @@ export type UseGeminiLiveReturn = {
   error: string | null
   transcript: string
   storySetup: string | null
+  storyStarted: boolean
   connect: () => void
   disconnect: () => void
   sendTurn: (text: string) => void
@@ -51,13 +63,16 @@ export function useGeminiLive(): UseGeminiLiveReturn {
   const [error, setError] = useState<string | null>(null)
   const [transcriptLines, setTranscriptLines] = useState<TranscriptEntry[]>([])
   const [storySetup, setStorySetup] = useState<string | null>(null)
+  const [storyStarted, setStoryStarted] = useState(false)
 
   const sessionRef = useRef<Session | null>(null)
   const storySetupAbortRef = useRef<AbortController | null>(null)
   const queueRef = useRef<LiveServerMessage[]>([])
   const audioPartsRef = useRef<string[]>([])
   const mimeTypeRef = useRef<string>("audio/pcm;rate=24000")
-  const handleTurnRef = useRef<(() => Promise<void>) | null>(null)
+  const handleTurnRef = useRef<
+    (() => Promise<LiveServerMessage | null>) | null
+  >(null)
   const isHandlingTurnRef = useRef(false)
   const pendingConnectRef = useRef(false)
 
@@ -76,6 +91,7 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     setError(null)
     setTranscriptLines([])
     setStorySetup(null)
+    setStoryStarted(false)
   }, [])
 
   const connect = useCallback(async () => {
@@ -189,14 +205,17 @@ export function useGeminiLive(): UseGeminiLiveReturn {
       })
     }
 
-    async function handleTurn(): Promise<void> {
+    async function handleTurn(): Promise<LiveServerMessage | null> {
       let done = false
+      let lastMessage: LiveServerMessage | null = null
       while (!done) {
         const message = await waitMessage()
-        if (message.serverContent?.turnComplete) {
+        lastMessage = message
+        if (message.serverContent?.turnComplete || message.toolCall) {
           done = true
         }
       }
+      return lastMessage
     }
     handleTurnRef.current = handleTurn
 
@@ -219,6 +238,7 @@ export function useGeminiLive(): UseGeminiLiveReturn {
             triggerTokens: "104857",
             slidingWindow: { targetTokens: "52428" },
           },
+          tools: [{ functionDeclarations: [START_STORY_TOOL] }],
         },
         callbacks: {
           onopen: () => {
@@ -288,6 +308,21 @@ export function useGeminiLive(): UseGeminiLiveReturn {
       if (!handleTurn) return
       isHandlingTurnRef.current = true
       handleTurn()
+        .then(async (lastMessage) => {
+          const toolCall = lastMessage?.toolCall
+          const session = sessionRef.current
+          if (!session || !toolCall?.functionCalls?.length) return
+          const functionResponses = toolCall.functionCalls.map((fc) => ({
+            id: fc.id,
+            name: fc.name,
+            response: { result: "ok" } as Record<string, unknown>,
+            scheduling: FunctionResponseScheduling.WHEN_IDLE,
+          }))
+          await new Promise((r) => setTimeout(r, 10_000))
+          session.sendToolResponse({ functionResponses })
+          setStoryStarted(true)
+          await handleTurn()
+        })
         .finally(() => {
           isHandlingTurnRef.current = false
         })
@@ -305,6 +340,7 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     error,
     transcript,
     storySetup,
+    storyStarted,
     connect,
     disconnect,
     sendTurn,
