@@ -24,6 +24,7 @@ export type UseGeminiLiveReturn = {
   connectionState: ConnectionState
   error: string | null
   transcript: string
+  storySetup: string | null
   connect: () => void
   disconnect: () => void
   sendTurn: (text: string) => void
@@ -40,8 +41,10 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     useState<ConnectionState>("disconnected")
   const [error, setError] = useState<string | null>(null)
   const [transcriptLines, setTranscriptLines] = useState<TranscriptEntry[]>([])
+  const [storySetup, setStorySetup] = useState<string | null>(null)
 
   const sessionRef = useRef<Session | null>(null)
+  const storySetupAbortRef = useRef<AbortController | null>(null)
   const queueRef = useRef<LiveServerMessage[]>([])
   const audioPartsRef = useRef<string[]>([])
   const mimeTypeRef = useRef<string>("audio/pcm;rate=24000")
@@ -57,10 +60,13 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     handleTurnRef.current = null
     queueRef.current = []
     audioPartsRef.current = []
+    storySetupAbortRef.current?.abort()
+    storySetupAbortRef.current = null
     stopPlayback()
     setConnectionState("disconnected")
     setError(null)
     setTranscriptLines([])
+    setStorySetup(null)
   }, [])
 
   const connect = useCallback(async () => {
@@ -230,21 +236,56 @@ export function useGeminiLive(): UseGeminiLiveReturn {
       })
   }, [connectionState, fetcher.state, fetcher.data, disconnect])
 
-  const sendTurn = useCallback((text: string) => {
-    const session = sessionRef.current
-    if (!session) return
-    if (isHandlingTurnRef.current) return
-    setTranscriptLines((prev) => [...prev, { role: "user", text }])
-    session.sendClientContent({ turns: [text] })
-    const handleTurn = handleTurnRef.current
-    if (!handleTurn) return
-    isHandlingTurnRef.current = true
-    handleTurn()
-      .finally(() => {
-        isHandlingTurnRef.current = false
+  const sendTurn = useCallback(
+    (text: string) => {
+      const session = sessionRef.current
+      if (!session) return
+      if (isHandlingTurnRef.current) return
+      setTranscriptLines((prev) => [...prev, { role: "user", text }])
+      session.sendClientContent({ turns: [text] })
+
+      // Non-blocking: update story setup from transcript (including this turn)
+      const transcriptForSetup = [
+        ...transcriptLines,
+        { role: "user" as const, text },
+      ]
+        .map((e) => `${e.role === "user" ? "You" : "Agent"}: ${e.text}`)
+        .join("\n\n")
+      storySetupAbortRef.current?.abort()
+      const controller = new AbortController()
+      storySetupAbortRef.current = controller
+      fetch("/api/story-setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript: transcriptForSetup }),
+        signal: controller.signal,
       })
-      .catch(() => {})
-  }, [])
+        .then((res) =>
+          res.ok
+            ? res.json()
+            : Promise.reject(new Error("Story setup request failed")),
+        )
+        .then((data: { markdown?: string }) => {
+          if (typeof data.markdown === "string") setStorySetup(data.markdown)
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (storySetupAbortRef.current === controller) {
+            storySetupAbortRef.current = null
+          }
+        })
+
+      const handleTurn = handleTurnRef.current
+      if (!handleTurn) return
+      isHandlingTurnRef.current = true
+      handleTurn()
+        .finally(() => {
+          isHandlingTurnRef.current = false
+        })
+        .catch(() => {})
+    },
+    [transcriptLines],
+  )
 
   const transcript = transcriptLines
     .map((e) => `${e.role === "user" ? "You" : "Agent"}: ${e.text}`)
@@ -254,6 +295,7 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     connectionState,
     error,
     transcript,
+    storySetup,
     connect,
     disconnect,
     sendTurn,

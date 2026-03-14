@@ -1,12 +1,20 @@
 import { useState } from "react"
+import ReactMarkdown from "react-markdown"
 import { Phone, PhoneOff, Send } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { useGeminiLive } from "~/lib/useGeminiLive"
 
 export function VoiceChat() {
   const [inputText, setInputText] = useState("")
-  const { connectionState, error, transcript, connect, disconnect, sendTurn } =
-    useGeminiLive()
+  const {
+    connectionState,
+    error,
+    transcript,
+    storySetup,
+    connect,
+    disconnect,
+    sendTurn,
+  } = useGeminiLive()
 
   const handleConnect = () => {
     if (connectionState === "connected") {
@@ -89,6 +97,17 @@ export function VoiceChat() {
             </div>
           )}
         </div>
+
+        {storySetup != null && storySetup !== "" && (
+          <div className="rounded-lg border border-border bg-muted/30 p-4">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+              Story setup
+            </p>
+            <div className="text-sm [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:list-decimal [&_ol]:pl-4 [&_h2]:font-semibold [&_h2]:mt-2 [&_p]:mb-1">
+              <ReactMarkdown>{storySetup}</ReactMarkdown>
+            </div>
+          </div>
+        )}
 
         {transcript && (
           <div className="rounded-lg border border-border bg-muted/30 p-4">
