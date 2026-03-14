@@ -71,6 +71,7 @@ export function useNarratorAgent(
   }, [fetcher, storyConfig])
 
   useEffect(() => {
+    console.log("use effect called")
     if (
       !storyConfig ||
       !pendingConnectRef.current ||
@@ -125,7 +126,7 @@ export function useNarratorAgent(
         config: {
           responseModalities: [Modality.AUDIO],
           enableAffectiveDialog: true,
-          proactivity: { proactiveAudio: false },
+          proactivity: { proactiveAudio: true },
           systemInstruction: buildNarratorSystemInstruction(
             storyConfig.shortPlot,
           ),
