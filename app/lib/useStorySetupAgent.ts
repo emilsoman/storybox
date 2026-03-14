@@ -12,47 +12,43 @@ import type {
   Session,
   StoryConfig,
   TranscriptEntry,
-  UseGeminiLiveReturn,
+  UseStorySetupAgentReturn,
 } from "~/lib/gemini-live.types"
 import {
-  buildNarratorSystemInstruction,
   MODEL,
   STORY_SETUP_SYSTEM_INSTRUCTION,
   START_STORY_TOOL,
 } from "~/lib/story-agent-config"
 import {
   createHandleModelTurn,
-  createHandleTurnNarrator,
   createHandleTurnSetup,
   createWaitMessage,
 } from "~/lib/live-turn-handlers"
 
-export type { ConnectionState, StoryConfig, UseGeminiLiveReturn }
+export type { UseStorySetupAgentReturn }
 
-export function useGeminiLive(): UseGeminiLiveReturn {
+export function useStorySetupAgent(): UseStorySetupAgentReturn {
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("disconnected")
   const [error, setError] = useState<string | null>(null)
   const [transcriptLines, setTranscriptLines] = useState<TranscriptEntry[]>([])
   const [storySetup, setStorySetup] = useState<string | null>(null)
-  const [storyStarted, setStoryStarted] = useState(false)
   const [storyConfig, setStoryConfig] = useState<StoryConfig | null>(null)
+  const [setupDone, setSetupDone] = useState(false)
 
   const sessionRef = useRef<Session | null>(null)
   const storySetupAbortRef = useRef<AbortController | null>(null)
-  const storyConfigRef = useRef<StoryConfig | null>(null)
-  const replacingWithStoryRef = useRef(false)
   const queueRef = useRef<LiveServerMessage[]>([])
   const audioPartsRef = useRef<string[]>([])
   const mimeTypeRef = useRef<string>("audio/pcm;rate=24000")
   const handleTurnSetupRef = useRef<
     (() => Promise<LiveServerMessage | null>) | null
   >(null)
-  const handleTurnNarratorRef = useRef<(() => Promise<void>) | null>(null)
   const isHandlingTurnRef = useRef(false)
   const pendingConnectRef = useRef(false)
   const transcriptLinesRef = useRef<TranscriptEntry[]>([])
   const storySetupRef = useRef<string | null>(null)
+  const isTransitioningToNarratorRef = useRef(false)
   transcriptLinesRef.current = transcriptLines
   storySetupRef.current = storySetup
 
@@ -62,20 +58,17 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     sessionRef.current?.close()
     sessionRef.current = null
     handleTurnSetupRef.current = null
-    handleTurnNarratorRef.current = null
     queueRef.current = []
     audioPartsRef.current = []
     storySetupAbortRef.current?.abort()
     storySetupAbortRef.current = null
-    storyConfigRef.current = null
-    replacingWithStoryRef.current = false
     stopPlayback()
     setConnectionState("disconnected")
     setError(null)
     setTranscriptLines([])
     setStorySetup(null)
-    setStoryStarted(false)
     setStoryConfig(null)
+    setSetupDone(false)
   }, [])
 
   const connect = useCallback(async () => {
@@ -134,18 +127,7 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     })
     const waitMessage = createWaitMessage(queueRef, handleModelTurn)
     const handleTurnSetup = createHandleTurnSetup(waitMessage)
-    const handleTurnNarrator = createHandleTurnNarrator(waitMessage)
     handleTurnSetupRef.current = handleTurnSetup
-    handleTurnNarratorRef.current = handleTurnNarrator
-
-    const configForSession = storyConfigRef.current
-    const systemInstruction = configForSession
-      ? buildNarratorSystemInstruction(configForSession.shortPlot)
-      : STORY_SETUP_SYSTEM_INSTRUCTION
-    const voiceName = configForSession?.voiceName ?? "Zephyr"
-    const tools = configForSession
-      ? undefined
-      : [{ functionDeclarations: [START_STORY_TOOL] }]
 
     ai.live
       .connect({
@@ -154,11 +136,11 @@ export function useGeminiLive(): UseGeminiLiveReturn {
           responseModalities: [Modality.AUDIO],
           enableAffectiveDialog: true,
           proactivity: { proactiveAudio: true },
-          systemInstruction,
+          systemInstruction: STORY_SETUP_SYSTEM_INSTRUCTION,
           thinkingConfig: { thinkingBudget: 0 },
           speechConfig: {
             voiceConfig: {
-              prebuiltVoiceConfig: { voiceName },
+              prebuiltVoiceConfig: { voiceName: "Zephyr" },
             },
           },
           outputAudioTranscription: {},
@@ -166,12 +148,11 @@ export function useGeminiLive(): UseGeminiLiveReturn {
             triggerTokens: "104857",
             slidingWindow: { targetTokens: "52428" },
           },
-          ...(tools && { tools }),
+          tools: [{ functionDeclarations: [START_STORY_TOOL] }],
         },
         callbacks: {
           onopen: () => {
             setConnectionState("connected")
-            console.log("onopen")
           },
           onmessage: (message: LiveServerMessage) => {
             queueRef.current.push(message)
@@ -180,16 +161,23 @@ export function useGeminiLive(): UseGeminiLiveReturn {
             setError(e?.message ?? "Connection error")
           },
           onclose: () => {
-            if (replacingWithStoryRef.current) {
-              replacingWithStoryRef.current = false
-            } else {
-              disconnect()
+            if (isTransitioningToNarratorRef.current) {
+              isTransitioningToNarratorRef.current = false
+              sessionRef.current = null
+              handleTurnSetupRef.current = null
+              queueRef.current = []
+              audioPartsRef.current = []
+              storySetupAbortRef.current?.abort()
+              storySetupAbortRef.current = null
+              stopPlayback()
+              setConnectionState("disconnected")
+              return
             }
+            disconnect()
           },
         },
       })
       .then((session) => {
-        console.log("session set")
         sessionRef.current = session
         const message = "start"
         sendTurn(message)
@@ -209,21 +197,6 @@ export function useGeminiLive(): UseGeminiLiveReturn {
       setTranscriptLines((prev) => [...prev, { role: "user", text }])
       session.sendRealtimeInput({ text: text })
 
-      const isNarrator = !!storyConfigRef.current
-
-      if (isNarrator) {
-        const handleTurnNarrator = handleTurnNarratorRef.current
-        if (!handleTurnNarrator) return
-        isHandlingTurnRef.current = true
-        handleTurnNarrator()
-          .finally(() => {
-            isHandlingTurnRef.current = false
-          })
-          .catch(() => {})
-        return
-      }
-
-      // Story setup loop: update story setup from transcript, then handle turn (may get start_story)
       const transcriptForSetup = [
         ...transcriptLines,
         { role: "user" as const, text },
@@ -302,9 +275,6 @@ export function useGeminiLive(): UseGeminiLiveReturn {
           }
 
           setStoryConfig(prepareResult)
-          setStoryStarted(true)
-          storyConfigRef.current = prepareResult
-          replacingWithStoryRef.current = true
 
           const functionResponses = toolCall.functionCalls.map((fc) => ({
             id: fc.id,
@@ -317,16 +287,27 @@ export function useGeminiLive(): UseGeminiLiveReturn {
           }))
           sessionRef.current?.sendToolResponse({ functionResponses })
           await handleTurnSetupRef.current?.()
+          setSetupDone(true)
+          isTransitioningToNarratorRef.current = true
           sessionRef.current?.close()
           sessionRef.current = null
-          connect()
+          handleTurnSetupRef.current = null
+          queueRef.current = []
+          audioPartsRef.current = []
+          storySetupAbortRef.current?.abort()
+          storySetupAbortRef.current = null
+          stopPlayback()
+          setConnectionState("disconnected")
+          setError(null)
+          setTranscriptLines([])
+          setStorySetup(null)
         })
         .finally(() => {
           isHandlingTurnRef.current = false
         })
         .catch(() => {})
     },
-    [transcriptLines, connect],
+    [transcriptLines, disconnect],
   )
 
   const transcript = transcriptLines
@@ -338,8 +319,8 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     error,
     transcript,
     storySetup,
-    storyStarted,
     storyConfig,
+    setupDone,
     connect,
     disconnect,
     sendTurn,

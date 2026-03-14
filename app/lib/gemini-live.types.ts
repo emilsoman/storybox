@@ -8,13 +8,23 @@ export type StoryConfig = {
   voiceName: string
 }
 
-export type UseGeminiLiveReturn = {
+export type UseStorySetupAgentReturn = {
   connectionState: ConnectionState
   error: string | null
   transcript: string
   storySetup: string | null
-  storyStarted: boolean
   storyConfig: StoryConfig | null
+  /** True only after the setup agent has finished speaking following the start_story tool result. */
+  setupDone: boolean
+  connect: () => void
+  disconnect: () => void
+  sendTurn: (text: string) => void
+}
+
+export type UseNarratorAgentReturn = {
+  connectionState: ConnectionState
+  error: string | null
+  transcript: string
   connect: () => void
   disconnect: () => void
   sendTurn: (text: string) => void
