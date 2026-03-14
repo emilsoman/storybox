@@ -6,6 +6,9 @@ export type StoryConfig = {
   shortPlot: string
   lucideIconNames: string[]
   voiceName: string
+  /** Base64-encoded cover image from prepare-story (e.g. PNG). */
+  coverImageBase64?: string
+  coverImageMimeType?: string
 }
 
 export type UseStorySetupAgentReturn = {

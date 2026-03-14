@@ -265,6 +265,14 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
                 : [],
               voiceName:
                 typeof data.voiceName === "string" ? data.voiceName : "Zephyr",
+              ...(typeof data.coverImageBase64 === "string" &&
+                data.coverImageBase64 && {
+                  coverImageBase64: data.coverImageBase64,
+                  coverImageMimeType:
+                    typeof data.coverImageMimeType === "string"
+                      ? data.coverImageMimeType
+                      : "image/png",
+                }),
             }
           } catch {
             prepareResult = {

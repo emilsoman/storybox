@@ -13,11 +13,24 @@ function StoryPreparedSection({ config }: { config: StoryConfig }) {
     string,
     LucideIcon | undefined
   >
+  const coverImageDataUrl =
+    config.coverImageBase64 && config.coverImageMimeType
+      ? `data:${config.coverImageMimeType};base64,${config.coverImageBase64}`
+      : null
   return (
     <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
       <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
         Prepared story
       </p>
+      {coverImageDataUrl && (
+        <div className="rounded-md overflow-hidden border border-border bg-muted/50">
+          <img
+            src={coverImageDataUrl}
+            alt="Story cover"
+            className="w-full aspect-[4/3] object-cover"
+          />
+        </div>
+      )}
       {config.shortPlot && (
         <div>
           <p className="text-xs font-medium text-muted-foreground mb-1">Plot</p>

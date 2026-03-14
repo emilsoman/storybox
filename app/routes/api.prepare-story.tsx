@@ -1,6 +1,7 @@
 import type { Route } from "./+types/api.prepare-story"
 
 const PREPARE_STORY_MODEL = "gemini-2.0-flash"
+const IMAGE_MODEL = "gemini-2.5-flash-image"
 
 const VOICE_NAMES_WITH_TONES = `Puck -- Upbeat, Charon -- Informative, Kore -- Firm, Fenrir -- Excitable, Leda -- Youthful, Orus -- Firm, Aoede -- Breezy, Callirrhoe -- Easy-going, Autonoe -- Bright, Enceladus -- Breathy, Iapetus -- Clear, Umbriel -- Easy-going, Algieba -- Smooth, Despina -- Smooth, Erinome -- Clear, Algenib -- Gravelly, Rasalgethi -- Informative, Laomedeia -- Upbeat, Achernar -- Soft, Alnilam -- Firm, Schedar -- Even, Gacrux -- Mature, Pulcherrima -- Forward, Achird -- Friendly, Zubenelgenubi -- Casual, Vindemiatrix -- Gentle, Sadachbia -- Lively, Sadaltager -- Knowledgeable, Sulafat -- Warm`
 
@@ -110,7 +111,41 @@ ${transcript ? `\nConversation transcript (for context):\n${transcript}` : ""}`
         { status: 200 },
       )
     }
-    return Response.json(result)
+
+    let coverImageBase64: string | undefined
+    let coverImageMimeType: string | undefined
+    try {
+      const imagePrompt = `Create a single children's storybook cover illustration. Style: whimsical, colorful, friendly, suitable for kids. The image should capture the mood and main idea of this story—no text or words in the image. Story: ${result.shortPlot}`
+      const imageResponse = await client.models.generateContent({
+        model: IMAGE_MODEL,
+        contents: imagePrompt,
+      })
+      type ImagePart = { inlineData?: { data?: string; mimeType?: string } }
+      type ImageContent = { content?: { parts?: ImagePart[] } }
+      type ImageResponse = { candidates?: ImageContent[] }
+      const candidate = (imageResponse as ImageResponse).candidates?.[0]
+      const parts = candidate?.content?.parts
+      if (parts?.length) {
+        for (const part of parts) {
+          const inlineData = (part as ImagePart).inlineData
+          if (inlineData?.data) {
+            coverImageBase64 = inlineData.data
+            coverImageMimeType = inlineData.mimeType ?? "image/png"
+            break
+          }
+        }
+      }
+    } catch {
+      // continue without cover image
+    }
+
+    return Response.json({
+      ...result,
+      ...(coverImageBase64 && {
+        coverImageBase64,
+        coverImageMimeType: coverImageMimeType ?? "image/png",
+      }),
+    })
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Failed to prepare story"
