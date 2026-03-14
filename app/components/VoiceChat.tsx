@@ -1,18 +1,12 @@
-import { Mic, MicOff, Phone, PhoneOff } from "lucide-react"
+import { useState } from "react"
+import { Phone, PhoneOff, Send } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { useGeminiLive } from "~/lib/useGeminiLive"
 
 export function VoiceChat() {
-  const {
-    connectionState,
-    error,
-    transcript,
-    connect,
-    disconnect,
-    startMute,
-    stopMute,
-    isMuted,
-  } = useGeminiLive()
+  const [inputText, setInputText] = useState("")
+  const { connectionState, error, transcript, connect, disconnect, sendTurn } =
+    useGeminiLive()
 
   const handleConnect = () => {
     if (connectionState === "connected") {
@@ -20,6 +14,13 @@ export function VoiceChat() {
     } else {
       connect()
     }
+  }
+
+  const handleSend = () => {
+    const text = inputText.trim()
+    if (!text) return
+    sendTurn(text)
+    setInputText("")
   }
 
   return (
@@ -66,24 +67,26 @@ export function VoiceChat() {
           </Button>
 
           {connectionState === "connected" && (
-            <Button
-              variant="outline"
-              size="lg"
-              onClick={() => (isMuted ? stopMute() : startMute())}
-              className="min-w-[200px]"
-            >
-              {isMuted ? (
-                <>
-                  <MicOff className="mr-2 size-5" />
-                  Unmute
-                </>
-              ) : (
-                <>
-                  <Mic className="mr-2 size-5" />
-                  Mute
-                </>
-              )}
-            </Button>
+            <div className="w-full flex gap-2">
+              <input
+                type="text"
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSend()}
+                placeholder="Type your message…"
+                className="flex-1 min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                size="icon"
+                onClick={handleSend}
+                disabled={!inputText.trim()}
+                aria-label="Send"
+              >
+                <Send className="size-5" />
+              </Button>
+            </div>
           )}
         </div>
 

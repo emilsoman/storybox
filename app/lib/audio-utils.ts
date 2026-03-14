@@ -1,14 +1,12 @@
 /**
- * Audio utilities for Gemini Live API (aligned with reference MediaHandler):
- * - Mic capture: AudioWorklet → Float32 chunks → downsample to 16 kHz → Int16 → base64
- * - Playback: 24 kHz 16-bit PCM, scheduled sources, stop-all on interrupt
+ * Audio utilities for Gemini Live API.
+ * - Streaming playback: AudioWorklet queue (official gemini-live-api-examples pattern) for in-order, low-latency playback.
+ * - WAV helpers for parseMimeType, createWavHeader, convertToWav when needed.
  */
 
-const LIVE_INPUT_SAMPLE_RATE = 16000
 const LIVE_OUTPUT_SAMPLE_RATE = 24000
-const WORKLET_BUFFER_SIZE = 4096
 
-/** Single shared context for capture and playback (reference uses one MediaHandler.audioContext) */
+/** Single shared context for playback (24kHz to match Gemini output). */
 let sharedAudioContext: AudioContext | null = null
 
 function getAudioContext(): AudioContext {
@@ -17,76 +15,57 @@ function getAudioContext(): AudioContext {
       window.AudioContext ||
       (window as unknown as { webkitAudioContext?: typeof AudioContext })
         .webkitAudioContext
-    )()
+    )({ sampleRate: LIVE_OUTPUT_SAMPLE_RATE })
   }
   return sharedAudioContext
 }
 
-/** Downsample Float32 buffer (reference downsampleBuffer) */
-function downsampleBuffer(
-  buffer: Float32Array,
-  sampleRate: number,
-  outSampleRate: number,
-): Float32Array {
-  if (outSampleRate === sampleRate) return buffer
-  const ratio = sampleRate / outSampleRate
-  const newLength = Math.round(buffer.length / ratio)
-  const result = new Float32Array(newLength)
-  let offsetResult = 0
-  let offsetBuffer = 0
-  while (offsetResult < result.length) {
-    const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio)
-    let accum = 0,
-      count = 0
-    for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
-      accum += buffer[i]
-      count++
-    }
-    result[offsetResult] = count ? accum / count : 0
-    offsetResult++
-    offsetBuffer = nextOffsetBuffer
-  }
-  return result
-}
+/** Scheduled playback sources (used by playWavFromBase64Parts). */
+const scheduledSources: AudioBufferSourceNode[] = []
+let nextStartTime = 0
 
-/** Float32 → Int16 (reference convertFloat32ToInt16) */
-function convertFloat32ToInt16(buffer: Float32Array): ArrayBuffer {
-  const buf = new Int16Array(buffer.length)
-  for (let i = 0; i < buffer.length; i++) {
-    buf[i] = Math.min(1, Math.max(-1, buffer[i])) * 0x7fff
-  }
-  return buf.buffer
-}
-
-/** Int16 ArrayBuffer → base64 for API */
-function int16BufferToBase64(arrayBuffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(arrayBuffer)
-  let binary = ""
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i])
-  }
-  return btoa(binary)
-}
-
-/** Reference-style worklet: buffer 4096 Float32, post when full */
-const PCM_WORKLET_CODE = `
+/**
+ * Playback worklet: queues Float32Array chunks and drains them in order (official pattern).
+ * @see https://github.com/google-gemini/gemini-live-api-examples/tree/main/gemini-live-ephemeral-tokens-websocket/frontend
+ */
+const PLAYBACK_WORKLET_CODE = `
 class PCMProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.bufferSize = ${WORKLET_BUFFER_SIZE};
-    this.buffer = new Float32Array(this.bufferSize);
-    this.bufferIndex = 0;
-  }
-  process(inputs, outputs, params) {
-    const input = inputs[0];
-    if (!input || !input.length) return true;
-    const channelData = input[0];
-    for (let i = 0; i < channelData.length; i++) {
-      this.buffer[this.bufferIndex++] = channelData[i];
-      if (this.bufferIndex >= this.bufferSize) {
-        this.port.postMessage(this.buffer);
-        this.bufferIndex = 0;
+    this.audioQueue = [];
+    this.port.onmessage = (event) => {
+      if (event.data === "interrupt") {
+        this.audioQueue = [];
+      } else if (event.data instanceof Float32Array) {
+        this.audioQueue.push(event.data);
       }
+    };
+  }
+  process(inputs, outputs, parameters) {
+    const output = outputs[0];
+    if (output.length === 0) return true;
+    const channel = output[0];
+    let outputIndex = 0;
+    while (outputIndex < channel.length && this.audioQueue.length > 0) {
+      const currentBuffer = this.audioQueue[0];
+      if (!currentBuffer || currentBuffer.length === 0) {
+        this.audioQueue.shift();
+        continue;
+      }
+      const remainingOutput = channel.length - outputIndex;
+      const remainingBuffer = currentBuffer.length;
+      const copyLength = Math.min(remainingOutput, remainingBuffer);
+      for (let i = 0; i < copyLength; i++) {
+        channel[outputIndex++] = currentBuffer[i];
+      }
+      if (copyLength < remainingBuffer) {
+        this.audioQueue[0] = currentBuffer.slice(copyLength);
+      } else {
+        this.audioQueue.shift();
+      }
+    }
+    while (outputIndex < channel.length) {
+      channel[outputIndex++] = 0;
     }
     return true;
   }
@@ -94,17 +73,145 @@ class PCMProcessor extends AudioWorkletProcessor {
 registerProcessor("pcm-processor", PCMProcessor);
 `
 
-/** Scheduled playback sources (reference: scheduledSources, stopAudioPlayback) */
-const scheduledSources: AudioBufferSourceNode[] = []
-let nextStartTime = 0
+let playbackWorkletNode: AudioWorkletNode | null = null
+let playbackInitPromise: Promise<void> | null = null
 
-export type MicCapture = {
-  stop: () => void
+async function ensurePlaybackWorklet(): Promise<AudioWorkletNode> {
+  if (playbackWorkletNode) return playbackWorkletNode
+  if (playbackInitPromise) {
+    await playbackInitPromise
+    return playbackWorkletNode!
+  }
+  playbackInitPromise = (async () => {
+    const ctx = getAudioContext()
+    if (ctx.state === "suspended") await ctx.resume()
+    const blob = new Blob([PLAYBACK_WORKLET_CODE], {
+      type: "application/javascript",
+    })
+    const url = URL.createObjectURL(blob)
+    await ctx.audioWorklet.addModule(url)
+    URL.revokeObjectURL(url)
+    const node = new AudioWorkletNode(ctx, "pcm-processor")
+    node.connect(ctx.destination)
+    playbackWorkletNode = node
+  })()
+  await playbackInitPromise
+  return playbackWorkletNode!
 }
 
 /**
- * Initialize shared AudioContext (call on user gesture before capture/playback).
- * Reference: mediaHandler.initializeAudio() before connect.
+ * Play a single base64 PCM chunk via the worklet queue (official pattern).
+ * Chunks are played in order with no gaps. Call this for each inlineData as it arrives.
+ */
+export async function playPcmBase64Chunk(base64: string): Promise<void> {
+  if (!base64) return
+  const worklet = await ensurePlaybackWorklet()
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  const int16 = new Int16Array(bytes.buffer)
+  const float32 = new Float32Array(int16.length)
+  for (let i = 0; i < int16.length; i++) {
+    float32[i] = int16[i] / 32768
+  }
+  worklet.port.postMessage(float32)
+}
+
+export interface WavConversionOptions {
+  numChannels: number
+  sampleRate: number
+  bitsPerSample: number
+}
+
+/** Parse mimeType (e.g. "audio/pcm;rate=24000" or "audio/L16;rate=24000") into WAV options. */
+export function parseMimeType(mimeType: string): WavConversionOptions {
+  const [fileType, ...params] = mimeType.split(";").map((s) => s.trim())
+  const [, format] = fileType.split("/")
+
+  const options: Partial<WavConversionOptions> = {
+    numChannels: 1,
+    bitsPerSample: 16,
+    sampleRate: 24000,
+  }
+
+  if (format?.startsWith("L")) {
+    const bits = parseInt(format.slice(1), 10)
+    if (!isNaN(bits)) {
+      options.bitsPerSample = bits
+    }
+  }
+
+  for (const param of params) {
+    const [key, value] = param.split("=").map((s) => s.trim())
+    if (key === "rate") {
+      options.sampleRate = parseInt(value, 10)
+    }
+  }
+
+  return options as WavConversionOptions
+}
+
+/** Create WAV header (44 bytes). http://soundfile.sapp.org/doc/WaveFormat */
+export function createWavHeader(
+  dataLength: number,
+  options: WavConversionOptions,
+): Uint8Array {
+  const { numChannels, sampleRate, bitsPerSample } = options
+  const byteRate = (sampleRate * numChannels * bitsPerSample) / 8
+  const blockAlign = (numChannels * bitsPerSample) / 8
+  const buffer = new Uint8Array(44)
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+
+  const write = (str: string, offset: number) => {
+    for (let i = 0; i < str.length; i++) {
+      buffer[offset + i] = str.charCodeAt(i)
+    }
+  }
+  write("RIFF", 0)
+  view.setUint32(4, 36 + dataLength, true)
+  write("WAVE", 8)
+  write("fmt ", 12)
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, numChannels, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, byteRate, true)
+  view.setUint16(32, blockAlign, true)
+  view.setUint16(34, bitsPerSample, true)
+  write("data", 36)
+  view.setUint32(40, dataLength, true)
+
+  return buffer
+}
+
+/** Convert accumulated base64 PCM parts to WAV (browser-safe, no Node Buffer). */
+export function convertToWav(rawData: string[], mimeType: string): Uint8Array {
+  const options = parseMimeType(mimeType)
+  const decoded = rawData.map((data) => {
+    const binary = atob(data)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i)
+    }
+    return bytes
+  })
+  const dataLength = decoded.reduce((a, b) => a + b.length, 0)
+  const wavHeader = createWavHeader(dataLength, options)
+  const totalLength = wavHeader.length + dataLength
+  const result = new Uint8Array(totalLength)
+  result.set(wavHeader, 0)
+  let offset = wavHeader.length
+  for (const chunk of decoded) {
+    result.set(chunk, offset)
+    offset += chunk.length
+  }
+  return result
+}
+
+/**
+ * Initialize shared AudioContext (call on user gesture before playback).
  */
 export function initializeAudio(): Promise<void> {
   const ctx = getAudioContext()
@@ -115,106 +222,38 @@ export function initializeAudio(): Promise<void> {
 }
 
 /**
- * Capture microphone at 16 kHz, 16-bit PCM; call onChunk with base64.
- * Worklet posts Float32; we downsample to 16 kHz and convert to Int16 (reference flow).
+ * Convert accumulated base64 audio parts to WAV and play via decodeAudioData.
+ * Reference: convertToWav(audioParts, ...) then write; we play once at turnComplete so playback is one continuous WAV in order.
  */
-export function captureMic16k(
-  onChunk: (base64Pcm: string) => void,
-): Promise<MicCapture> {
-  return new Promise(async (resolve, reject) => {
-    let stream: MediaStream
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    } catch (e) {
-      reject(new Error("Microphone access denied"))
-      return
-    }
-
-    const ctx = getAudioContext()
-    try {
-      if (ctx.state === "suspended") await ctx.resume()
-      const blob = new Blob([PCM_WORKLET_CODE], {
-        type: "application/javascript",
-      })
-      const workletUrl = URL.createObjectURL(blob)
-      await ctx.audioWorklet.addModule(workletUrl)
-      URL.revokeObjectURL(workletUrl)
-    } catch (e) {
-      stream.getTracks().forEach((t) => t.stop())
-      reject(new Error("Failed to load audio worklet"))
-      return
-    }
-
-    const source = ctx.createMediaStreamSource(stream)
-    const workletNode = new AudioWorkletNode(ctx, "pcm-processor")
-
-    workletNode.port.onmessage = (event: MessageEvent<Float32Array>) => {
-      const downsampled = downsampleBuffer(
-        event.data,
-        ctx.sampleRate,
-        LIVE_INPUT_SAMPLE_RATE,
-      )
-      const pcm16 = convertFloat32ToInt16(downsampled)
-      onChunk(int16BufferToBase64(pcm16))
-    }
-
-    source.connect(workletNode)
-    const muteGain = ctx.createGain()
-    muteGain.gain.value = 0
-    workletNode.connect(muteGain)
-    muteGain.connect(ctx.destination)
-
-    resolve({
-      stop: () => {
-        workletNode.disconnect()
-        source.disconnect()
-        muteGain.disconnect()
-        stream.getTracks().forEach((t) => t.stop())
-      },
-    })
-  })
-}
-
-/**
- * Play 24 kHz 16-bit PCM from API (reference playAudio).
- * Schedules at nextStartTime for gapless playback; no queue.
- */
-export function playPcm24kBase64(base64: string): void {
+export function playWavFromBase64Parts(
+  rawData: string[],
+  mimeType: string,
+): Promise<void> {
+  if (rawData.length === 0) return Promise.resolve()
   const ctx = getAudioContext()
   if (ctx.state === "suspended") ctx.resume()
 
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i)
-  }
-  const pcmData = new Int16Array(bytes.buffer)
-  const float32Data = new Float32Array(pcmData.length)
-  for (let i = 0; i < pcmData.length; i++) {
-    float32Data[i] = pcmData[i] / 32768.0
-  }
+  const wavBytes = convertToWav(rawData, mimeType)
+  const slice = wavBytes.buffer.slice(
+    wavBytes.byteOffset,
+    wavBytes.byteOffset + wavBytes.byteLength,
+  ) as ArrayBuffer
+  return ctx.decodeAudioData(slice).then((decoded) => {
+    const source = ctx.createBufferSource()
+    source.buffer = decoded
+    source.connect(ctx.destination)
 
-  const buffer = ctx.createBuffer(
-    1,
-    float32Data.length,
-    LIVE_OUTPUT_SAMPLE_RATE,
-  )
-  buffer.getChannelData(0).set(float32Data)
+    const now = ctx.currentTime
+    nextStartTime = Math.max(now, nextStartTime)
+    source.start(nextStartTime)
+    nextStartTime += decoded.duration
 
-  const source = ctx.createBufferSource()
-  source.buffer = buffer
-  source.connect(ctx.destination)
-
-  const now = ctx.currentTime
-  nextStartTime = Math.max(now, nextStartTime)
-  source.start(nextStartTime)
-  nextStartTime += buffer.duration
-
-  scheduledSources.push(source)
-  source.onended = () => {
-    const idx = scheduledSources.indexOf(source)
-    if (idx > -1) scheduledSources.splice(idx, 1)
-  }
+    scheduledSources.push(source)
+    source.onended = () => {
+      const idx = scheduledSources.indexOf(source)
+      if (idx > -1) scheduledSources.splice(idx, 1)
+    }
+  })
 }
 
 /**
@@ -222,6 +261,9 @@ export function playPcm24kBase64(base64: string): void {
  * Call when server sends interrupted so the model doesn’t talk over the user.
  */
 export function clearPlaybackBuffer(): void {
+  if (playbackWorkletNode) {
+    playbackWorkletNode.port.postMessage("interrupt")
+  }
   scheduledSources.forEach((s) => {
     try {
       s.stop()
@@ -240,6 +282,8 @@ export function clearPlaybackBuffer(): void {
 export function stopPlayback(): void {
   clearPlaybackBuffer()
   nextStartTime = 0
+  playbackWorkletNode = null
+  playbackInitPromise = null
   if (sharedAudioContext) {
     sharedAudioContext.close()
     sharedAudioContext = null

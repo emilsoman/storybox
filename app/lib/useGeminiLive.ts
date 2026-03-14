@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useFetcher } from "react-router"
-import { GoogleGenAI, Modality } from "@google/genai/web"
 import {
-  captureMic16k,
+  GoogleGenAI,
+  type LiveServerMessage,
+  Modality,
+} from "@google/genai/web"
+import {
   clearPlaybackBuffer,
   initializeAudio,
-  playPcm24kBase64,
+  playPcmBase64Chunk,
   stopPlayback,
 } from "~/lib/audio-utils"
 
@@ -20,38 +23,38 @@ export type ConnectionState = "disconnected" | "connecting" | "connected"
 export type UseGeminiLiveReturn = {
   connectionState: ConnectionState
   error: string | null
-  /** Literal transcript: "You: …" and "Agent: …" from input/output audio transcription only */
   transcript: string
   connect: () => void
   disconnect: () => void
-  startMute: () => void
-  stopMute: () => void
-  isMuted: boolean
+  sendTurn: (text: string) => void
 }
+
+type Session = Awaited<
+  ReturnType<InstanceType<typeof GoogleGenAI>["live"]["connect"]>
+>
 
 export function useGeminiLive(): UseGeminiLiveReturn {
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("disconnected")
   const [error, setError] = useState<string | null>(null)
   const [transcriptLines, setTranscriptLines] = useState<string[]>([])
-  const [isMuted, setIsMuted] = useState(false)
 
-  const sessionRef = useRef<Awaited<
-    ReturnType<InstanceType<typeof GoogleGenAI>["live"]["connect"]>
-  > | null>(null)
-  const micCaptureRef = useRef<Awaited<
-    ReturnType<typeof captureMic16k>
-  > | null>(null)
-  const isMutedRef = useRef(false)
+  const sessionRef = useRef<Session | null>(null)
+  const queueRef = useRef<LiveServerMessage[]>([])
+  const audioPartsRef = useRef<string[]>([])
+  const mimeTypeRef = useRef<string>("audio/pcm;rate=24000")
+  const handleTurnRef = useRef<(() => Promise<void>) | null>(null)
+  const isHandlingTurnRef = useRef(false)
   const pendingConnectRef = useRef(false)
-  isMutedRef.current = isMuted
 
   const fetcher = useFetcher<{ token?: string; error?: string }>()
 
   const disconnect = useCallback(() => {
-    micCaptureRef.current?.stop()
-    micCaptureRef.current = null
+    sessionRef.current?.close()
     sessionRef.current = null
+    handleTurnRef.current = null
+    queueRef.current = []
+    audioPartsRef.current = []
     stopPlayback()
     setConnectionState("disconnected")
     setError(null)
@@ -102,48 +105,75 @@ export function useGeminiLive(): UseGeminiLiveReturn {
       return
     }
 
-    // Ephemeral tokens require v1alpha; SDK defaults to v1beta (see Live API ephemeral token docs)
     const ai = new GoogleGenAI({
       apiKey: token,
       httpOptions: { apiVersion: "v1alpha" as const },
     })
-    function handleServerContent(
-      content:
-        | {
-            interrupted?: boolean
-            outputTranscription?: { text?: string }
-            inputTranscription?: { text?: string }
-            modelTurn?: {
-              parts?: Array<{ text?: string; inlineData?: { data?: string } }>
-            }
-          }
-        | undefined,
-    ) {
+
+    function handleModelTurn(message: LiveServerMessage): void {
+      const content = message.serverContent
       if (!content) return
+
       if (content.interrupted) {
         clearPlaybackBuffer()
+        audioPartsRef.current = []
       }
-      // Literal transcript of what the agent actually spoke (audio transcription only)
+
+      // Use outputTranscription (what was actually spoken), not modelTurn.parts text (includes thinking)
       if (content.outputTranscription?.text) {
         setTranscriptLines((prev) => [
           ...prev,
           `Agent: ${content.outputTranscription!.text}`,
         ])
       }
-      // Literal transcript of what the user actually said (audio transcription only)
-      if (content.inputTranscription?.text) {
-        setTranscriptLines((prev) => [
-          ...prev,
-          `You: ${content.inputTranscription!.text}`,
-        ])
+
+      // Official pattern: play each audio chunk as it arrives via worklet queue (in order, continuous). See gemini-live-api-examples frontend.
+      const parts = content.modelTurn?.parts
+      if (parts) {
+        const part = parts[0]
+        if (part?.fileData) {
+          // reference only logs
+        } else if (part?.inlineData) {
+          const data = part.inlineData?.data ?? ""
+          if (data) {
+            playPcmBase64Chunk(data).catch(() => {})
+          }
+          if (part.inlineData?.mimeType) {
+            mimeTypeRef.current = part.inlineData.mimeType
+          }
+        }
       }
-      // Play audio; do not add modelTurn.parts text to transcript (it's generated content, not literal speech)
-      for (const part of content.modelTurn?.parts ?? []) {
-        if (part.inlineData?.data) {
-          playPcm24kBase64(part.inlineData.data)
+
+      if (content.turnComplete) {
+        audioPartsRef.current = []
+      }
+    }
+
+    function waitMessage(): Promise<LiveServerMessage> {
+      return new Promise((resolve) => {
+        const check = () => {
+          const message = queueRef.current.shift()
+          if (message) {
+            handleModelTurn(message)
+            resolve(message)
+            return
+          }
+          setTimeout(check, 100)
+        }
+        check()
+      })
+    }
+
+    async function handleTurn(): Promise<void> {
+      let done = false
+      while (!done) {
+        const message = await waitMessage()
+        if (message.serverContent?.turnComplete) {
+          done = true
         }
       }
     }
+    handleTurnRef.current = handleTurn
 
     ai.live
       .connect({
@@ -153,21 +183,21 @@ export function useGeminiLive(): UseGeminiLiveReturn {
           systemInstruction: STORY_SETUP_SYSTEM_INSTRUCTION,
           speechConfig: {
             voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: "Puck" },
+              prebuiltVoiceConfig: { voiceName: "Zephyr" },
             },
           },
           outputAudioTranscription: {},
-          inputAudioTranscription: {},
-          contextWindowCompression: { slidingWindow: {} },
+          contextWindowCompression: {
+            triggerTokens: "104857",
+            slidingWindow: { targetTokens: "52428" },
+          },
         },
         callbacks: {
           onopen: () => {
             setConnectionState("connected")
           },
-          onmessage: (message: {
-            serverContent?: Parameters<typeof handleServerContent>[0]
-          }) => {
-            handleServerContent(message.serverContent)
+          onmessage: (message: LiveServerMessage) => {
+            queueRef.current.push(message)
           },
           onerror: (e: ErrorEvent) => {
             setError(e?.message ?? "Connection error")
@@ -179,19 +209,6 @@ export function useGeminiLive(): UseGeminiLiveReturn {
       })
       .then((session) => {
         sessionRef.current = session
-        return captureMic16k((base64Pcm) => {
-          if (sessionRef.current && !isMutedRef.current) {
-            sessionRef.current.sendRealtimeInput({
-              audio: {
-                data: base64Pcm,
-                mimeType: "audio/pcm;rate=16000",
-              },
-            })
-          }
-        })
-      })
-      .then((capture) => {
-        micCaptureRef.current = capture
       })
       .catch((err) => {
         const message = err instanceof Error ? err.message : "Failed to connect"
@@ -200,8 +217,21 @@ export function useGeminiLive(): UseGeminiLiveReturn {
       })
   }, [connectionState, fetcher.state, fetcher.data, disconnect])
 
-  const startMute = useCallback(() => setIsMuted(true), [])
-  const stopMute = useCallback(() => setIsMuted(false), [])
+  const sendTurn = useCallback((text: string) => {
+    const session = sessionRef.current
+    if (!session) return
+    if (isHandlingTurnRef.current) return
+    setTranscriptLines((prev) => [...prev, `You: ${text}`])
+    session.sendClientContent({ turns: [text] })
+    const handleTurn = handleTurnRef.current
+    if (!handleTurn) return
+    isHandlingTurnRef.current = true
+    handleTurn()
+      .finally(() => {
+        isHandlingTurnRef.current = false
+      })
+      .catch(() => {})
+  }, [])
 
   const transcript = transcriptLines.join("\n\n")
 
@@ -211,8 +241,6 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     transcript,
     connect,
     disconnect,
-    startMute,
-    stopMute,
-    isMuted,
+    sendTurn,
   }
 }
