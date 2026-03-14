@@ -378,6 +378,8 @@ export function useNarratorAgent(
     transcript,
     currentPage,
     nextPageReady,
+    currentCharacters,
+    currentIllustrationStyle,
     connect,
     disconnect,
     sendTurn,

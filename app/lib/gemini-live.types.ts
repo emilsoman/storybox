@@ -49,6 +49,10 @@ export type UseNarratorAgentReturn = {
   transcript: string
   currentPage: PageContent
   nextPageReady: boolean
+  /** Live character list (updated as story progresses). */
+  currentCharacters: CharacterDetails[]
+  /** Live illustration style prefix (updated as story progresses). */
+  currentIllustrationStyle: string
   connect: () => void
   disconnect: () => void
   sendTurn: (text: string) => void
