@@ -4,69 +4,30 @@ import {
   GoogleGenAI,
   type LiveServerMessage,
   Modality,
-  Behavior,
   FunctionResponseScheduling,
 } from "@google/genai/web"
+import { initializeAudio, stopPlayback } from "~/lib/audio-utils"
+import type {
+  ConnectionState,
+  Session,
+  StoryConfig,
+  TranscriptEntry,
+  UseGeminiLiveReturn,
+} from "~/lib/gemini-live.types"
 import {
-  clearPlaybackBuffer,
-  initializeAudio,
-  playPcmBase64Chunk,
-  stopPlayback,
-} from "~/lib/audio-utils"
+  buildNarratorSystemInstruction,
+  MODEL,
+  STORY_SETUP_SYSTEM_INSTRUCTION,
+  START_STORY_TOOL,
+} from "~/lib/story-agent-config"
+import {
+  createHandleModelTurn,
+  createHandleTurnNarrator,
+  createHandleTurnSetup,
+  createWaitMessage,
+} from "~/lib/live-turn-handlers"
 
-const MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
-
-const STORY_SETUP_SYSTEM_INSTRUCTION = `
-You are a friendly story co-creator helping someone set up a kids' storybook.
-Your job is to collect a story setup: who the characters are, where
-the story takes place, the tone (e.g. funny, gentle, adventurous), and any plot
-ideas they have.
-
-Keep your replies short and conversational so they work well when spoken aloud.
-
-When starting, greet the user and ask them for the story setup unless one is provided already.
-Be warm and friendly, but concise.
-You don't need to ask follow ups.
-
-When you have collected enough story setup (characters, setting, tone, plot ideas), call the start_story tool to begin the story. While the tool is running, speak for about 10 seconds to build anticipation—talk to the audience to get them excited for the story that's about to start.
-`
-
-const START_STORY_TOOL = {
-  name: "start_story",
-  description:
-    "Call this when the story setup is complete to start the story. The app will prepare and return the story plot in the tool response. Use that plot to build anticipation—tell the audience what the story is about (from the plot you receive), don't make things up.",
-  behavior: Behavior.NON_BLOCKING,
-} as const
-
-function buildNarratorSystemInstruction(shortPlot: string): string {
-  return `You are the narrator for a kids' storybook. Here is the story plot: ${shortPlot}. Narrate engagingly and match the tone; keep replies suitable for spoken aloud.`
-}
-
-export type ConnectionState = "disconnected" | "connecting" | "connected"
-
-export type StoryConfig = {
-  shortPlot: string
-  lucideIconNames: string[]
-  voiceName: string
-}
-
-export type UseGeminiLiveReturn = {
-  connectionState: ConnectionState
-  error: string | null
-  transcript: string
-  storySetup: string | null
-  storyStarted: boolean
-  storyConfig: StoryConfig | null
-  connect: () => void
-  disconnect: () => void
-  sendTurn: (text: string) => void
-}
-
-type Session = Awaited<
-  ReturnType<InstanceType<typeof GoogleGenAI>["live"]["connect"]>
->
-
-type TranscriptEntry = { role: "user" | "agent"; text: string }
+export type { ConnectionState, StoryConfig, UseGeminiLiveReturn }
 
 export function useGeminiLive(): UseGeminiLiveReturn {
   const [connectionState, setConnectionState] =
@@ -84,9 +45,10 @@ export function useGeminiLive(): UseGeminiLiveReturn {
   const queueRef = useRef<LiveServerMessage[]>([])
   const audioPartsRef = useRef<string[]>([])
   const mimeTypeRef = useRef<string>("audio/pcm;rate=24000")
-  const handleTurnRef = useRef<
+  const handleTurnSetupRef = useRef<
     (() => Promise<LiveServerMessage | null>) | null
   >(null)
+  const handleTurnNarratorRef = useRef<(() => Promise<void>) | null>(null)
   const isHandlingTurnRef = useRef(false)
   const pendingConnectRef = useRef(false)
   const transcriptLinesRef = useRef<TranscriptEntry[]>([])
@@ -99,7 +61,8 @@ export function useGeminiLive(): UseGeminiLiveReturn {
   const disconnect = useCallback(() => {
     sessionRef.current?.close()
     sessionRef.current = null
-    handleTurnRef.current = null
+    handleTurnSetupRef.current = null
+    handleTurnNarratorRef.current = null
     queueRef.current = []
     audioPartsRef.current = []
     storySetupAbortRef.current?.abort()
@@ -164,81 +127,16 @@ export function useGeminiLive(): UseGeminiLiveReturn {
       httpOptions: { apiVersion: "v1alpha" as const },
     })
 
-    function handleModelTurn(message: LiveServerMessage): void {
-      const content = message.serverContent
-      if (!content) return
-
-      if (content.interrupted) {
-        clearPlaybackBuffer()
-        audioPartsRef.current = []
-      }
-
-      // Use outputTranscription (what was actually spoken), not modelTurn.parts text (includes thinking)
-      // Append to the same agent line so the UI updates in place instead of one line per chunk
-      if (content.outputTranscription?.text) {
-        const chunk = content.outputTranscription.text
-        setTranscriptLines((prev) => {
-          const last = prev[prev.length - 1]
-          if (last?.role === "agent") {
-            return [
-              ...prev.slice(0, -1),
-              { role: "agent", text: last.text + chunk },
-            ]
-          }
-          return [...prev, { role: "agent", text: chunk }]
-        })
-      }
-
-      // Official pattern: play each audio chunk as it arrives via worklet queue (in order, continuous). See gemini-live-api-examples frontend.
-      const parts = content.modelTurn?.parts
-      if (parts) {
-        const part = parts[0]
-        if (part?.fileData) {
-          // reference only logs
-        } else if (part?.inlineData) {
-          const data = part.inlineData?.data ?? ""
-          if (data) {
-            playPcmBase64Chunk(data).catch(() => {})
-          }
-          if (part.inlineData?.mimeType) {
-            mimeTypeRef.current = part.inlineData.mimeType
-          }
-        }
-      }
-
-      if (content.turnComplete) {
-        audioPartsRef.current = []
-      }
-    }
-
-    function waitMessage(): Promise<LiveServerMessage> {
-      return new Promise((resolve) => {
-        const check = () => {
-          const message = queueRef.current.shift()
-          if (message) {
-            handleModelTurn(message)
-            resolve(message)
-            return
-          }
-          setTimeout(check, 100)
-        }
-        check()
-      })
-    }
-
-    async function handleTurn(): Promise<LiveServerMessage | null> {
-      let done = false
-      let lastMessage: LiveServerMessage | null = null
-      while (!done) {
-        const message = await waitMessage()
-        lastMessage = message
-        if (message.serverContent?.turnComplete || message.toolCall) {
-          done = true
-        }
-      }
-      return lastMessage
-    }
-    handleTurnRef.current = handleTurn
+    const handleModelTurn = createHandleModelTurn({
+      setTranscriptLines,
+      audioPartsRef,
+      mimeTypeRef,
+    })
+    const waitMessage = createWaitMessage(queueRef, handleModelTurn)
+    const handleTurnSetup = createHandleTurnSetup(waitMessage)
+    const handleTurnNarrator = createHandleTurnNarrator(waitMessage)
+    handleTurnSetupRef.current = handleTurnSetup
+    handleTurnNarratorRef.current = handleTurnNarrator
 
     const configForSession = storyConfigRef.current
     const systemInstruction = configForSession
@@ -273,6 +171,7 @@ export function useGeminiLive(): UseGeminiLiveReturn {
         callbacks: {
           onopen: () => {
             setConnectionState("connected")
+            console.log("onopen")
           },
           onmessage: (message: LiveServerMessage) => {
             queueRef.current.push(message)
@@ -290,14 +189,10 @@ export function useGeminiLive(): UseGeminiLiveReturn {
         },
       })
       .then((session) => {
+        console.log("session set")
         sessionRef.current = session
-        if (storyConfigRef.current) {
-          setTranscriptLines((prev) => [
-            ...prev,
-            { role: "user", text: "Start the story." },
-          ])
-          session.sendClientContent({ turns: ["Start the story."] })
-        }
+        const message = "start"
+        sendTurn(message)
       })
       .catch((err) => {
         const message = err instanceof Error ? err.message : "Failed to connect"
@@ -312,9 +207,23 @@ export function useGeminiLive(): UseGeminiLiveReturn {
       if (!session) return
       if (isHandlingTurnRef.current) return
       setTranscriptLines((prev) => [...prev, { role: "user", text }])
-      session.sendClientContent({ turns: [text] })
+      session.sendRealtimeInput({ text: text })
 
-      // Non-blocking: update story setup from transcript (including this turn)
+      const isNarrator = !!storyConfigRef.current
+
+      if (isNarrator) {
+        const handleTurnNarrator = handleTurnNarratorRef.current
+        if (!handleTurnNarrator) return
+        isHandlingTurnRef.current = true
+        handleTurnNarrator()
+          .finally(() => {
+            isHandlingTurnRef.current = false
+          })
+          .catch(() => {})
+        return
+      }
+
+      // Story setup loop: update story setup from transcript, then handle turn (may get start_story)
       const transcriptForSetup = [
         ...transcriptLines,
         { role: "user" as const, text },
@@ -345,14 +254,13 @@ export function useGeminiLive(): UseGeminiLiveReturn {
           }
         })
 
-      const handleTurn = handleTurnRef.current
-      if (!handleTurn) return
+      const handleTurnSetup = handleTurnSetupRef.current
+      if (!handleTurnSetup) return
       isHandlingTurnRef.current = true
-      handleTurn()
+      handleTurnSetup()
         .then(async (lastMessage) => {
           const toolCall = lastMessage?.toolCall
-          const session = sessionRef.current
-          if (!session || !toolCall?.functionCalls?.length) return
+          if (!sessionRef.current || !toolCall?.functionCalls?.length) return
           const isStartStory = toolCall.functionCalls.some(
             (fc) => fc.name === "start_story",
           )
@@ -407,8 +315,8 @@ export function useGeminiLive(): UseGeminiLiveReturn {
             } as Record<string, unknown>,
             scheduling: FunctionResponseScheduling.WHEN_IDLE,
           }))
-          session.sendToolResponse({ functionResponses })
-          await handleTurn()
+          sessionRef.current?.sendToolResponse({ functionResponses })
+          await handleTurnSetupRef.current?.()
           sessionRef.current?.close()
           sessionRef.current = null
           connect()
@@ -418,7 +326,7 @@ export function useGeminiLive(): UseGeminiLiveReturn {
         })
         .catch(() => {})
     },
-    [transcriptLines],
+    [transcriptLines, connect],
   )
 
   const transcript = transcriptLines

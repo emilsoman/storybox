@@ -2,8 +2,7 @@ import type { Route } from "./+types/api.prepare-story"
 
 const PREPARE_STORY_MODEL = "gemini-2.0-flash"
 
-const VOICE_NAMES =
-  "Zephyr, Kore, Orus, Autonoe, Umbriel, Erinome, Laomedeia, Schedar, Achird, Sadachbia, Puck, Fenrir, Aoede, Enceladus, Algieba, Algenib, Achernar, Gacrux, Zubenelgenubi, Sadaltager, Charon, Leda, Callirrhoe, Iapetus, Despina, Rasalgethi, Alnilam, Pulcherrima, Vindemiatrix, Sulafat"
+const VOICE_NAMES = `Zephyr -- Bright, Puck -- Upbeat, Charon -- Informative, Kore -- Firm, Fenrir -- Excitable, Leda -- Youthful, Orus -- Firm, Aoede -- Breezy, Callirrhoe -- Easy-going, Autonoe -- Bright, Enceladus -- Breathy, Iapetus -- Clear, Umbriel -- Easy-going, Algieba -- Smooth, Despina -- Smooth, Erinome -- Clear, Algenib -- Gravelly, Rasalgethi -- Informative, Laomedeia -- Upbeat, Achernar -- Soft, Alnilam -- Firm, Schedar -- Even, Gacrux -- Mature, Pulcherrima -- Forward, Achird -- Friendly, Zubenelgenubi -- Casual, Vindemiatrix -- Gentle, Sadachbia -- Lively, Sadaltager -- Knowledgeable, Sulafat -- Warm`
 
 const PREPARE_STORY_PROMPT = `You are preparing a kids' storybook session. Given the story setup below, output a JSON object with exactly these three keys (no other text, no markdown code fence):
 
