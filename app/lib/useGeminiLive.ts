@@ -38,7 +38,17 @@ const START_STORY_TOOL = {
   behavior: Behavior.NON_BLOCKING,
 } as const
 
+function buildNarratorSystemInstruction(shortPlot: string): string {
+  return `You are the narrator for a kids' storybook. Here is the story plot: ${shortPlot}. Narrate engagingly and match the tone; keep replies suitable for spoken aloud.`
+}
+
 export type ConnectionState = "disconnected" | "connecting" | "connected"
+
+export type StoryConfig = {
+  shortPlot: string
+  lucideIconNames: string[]
+  voiceName: string
+}
 
 export type UseGeminiLiveReturn = {
   connectionState: ConnectionState
@@ -46,6 +56,7 @@ export type UseGeminiLiveReturn = {
   transcript: string
   storySetup: string | null
   storyStarted: boolean
+  storyConfig: StoryConfig | null
   connect: () => void
   disconnect: () => void
   sendTurn: (text: string) => void
@@ -64,9 +75,12 @@ export function useGeminiLive(): UseGeminiLiveReturn {
   const [transcriptLines, setTranscriptLines] = useState<TranscriptEntry[]>([])
   const [storySetup, setStorySetup] = useState<string | null>(null)
   const [storyStarted, setStoryStarted] = useState(false)
+  const [storyConfig, setStoryConfig] = useState<StoryConfig | null>(null)
 
   const sessionRef = useRef<Session | null>(null)
   const storySetupAbortRef = useRef<AbortController | null>(null)
+  const storyConfigRef = useRef<StoryConfig | null>(null)
+  const replacingWithStoryRef = useRef(false)
   const queueRef = useRef<LiveServerMessage[]>([])
   const audioPartsRef = useRef<string[]>([])
   const mimeTypeRef = useRef<string>("audio/pcm;rate=24000")
@@ -75,6 +89,10 @@ export function useGeminiLive(): UseGeminiLiveReturn {
   >(null)
   const isHandlingTurnRef = useRef(false)
   const pendingConnectRef = useRef(false)
+  const transcriptLinesRef = useRef<TranscriptEntry[]>([])
+  const storySetupRef = useRef<string | null>(null)
+  transcriptLinesRef.current = transcriptLines
+  storySetupRef.current = storySetup
 
   const fetcher = useFetcher<{ token?: string; error?: string }>()
 
@@ -86,12 +104,15 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     audioPartsRef.current = []
     storySetupAbortRef.current?.abort()
     storySetupAbortRef.current = null
+    storyConfigRef.current = null
+    replacingWithStoryRef.current = false
     stopPlayback()
     setConnectionState("disconnected")
     setError(null)
     setTranscriptLines([])
     setStorySetup(null)
     setStoryStarted(false)
+    setStoryConfig(null)
   }, [])
 
   const connect = useCallback(async () => {
@@ -219,6 +240,15 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     }
     handleTurnRef.current = handleTurn
 
+    const configForSession = storyConfigRef.current
+    const systemInstruction = configForSession
+      ? buildNarratorSystemInstruction(configForSession.shortPlot)
+      : STORY_SETUP_SYSTEM_INSTRUCTION
+    const voiceName = configForSession?.voiceName ?? "Zephyr"
+    const tools = configForSession
+      ? undefined
+      : [{ functionDeclarations: [START_STORY_TOOL] }]
+
     ai.live
       .connect({
         model: MODEL,
@@ -226,11 +256,11 @@ export function useGeminiLive(): UseGeminiLiveReturn {
           responseModalities: [Modality.AUDIO],
           enableAffectiveDialog: true,
           proactivity: { proactiveAudio: true },
-          systemInstruction: STORY_SETUP_SYSTEM_INSTRUCTION,
+          systemInstruction,
           thinkingConfig: { thinkingBudget: 0 },
           speechConfig: {
             voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: "Zephyr" },
+              prebuiltVoiceConfig: { voiceName },
             },
           },
           outputAudioTranscription: {},
@@ -238,7 +268,7 @@ export function useGeminiLive(): UseGeminiLiveReturn {
             triggerTokens: "104857",
             slidingWindow: { targetTokens: "52428" },
           },
-          tools: [{ functionDeclarations: [START_STORY_TOOL] }],
+          ...(tools && { tools }),
         },
         callbacks: {
           onopen: () => {
@@ -251,7 +281,11 @@ export function useGeminiLive(): UseGeminiLiveReturn {
             setError(e?.message ?? "Connection error")
           },
           onclose: () => {
-            disconnect()
+            if (replacingWithStoryRef.current) {
+              replacingWithStoryRef.current = false
+            } else {
+              disconnect()
+            }
           },
         },
       })
@@ -312,16 +346,62 @@ export function useGeminiLive(): UseGeminiLiveReturn {
           const toolCall = lastMessage?.toolCall
           const session = sessionRef.current
           if (!session || !toolCall?.functionCalls?.length) return
+          const isStartStory = toolCall.functionCalls.some(
+            (fc) => fc.name === "start_story",
+          )
+          if (!isStartStory) return
+
+          const transcriptForPrepare = transcriptLinesRef.current
+            .map((e) => `${e.role === "user" ? "You" : "Agent"}: ${e.text}`)
+            .join("\n\n")
+          const storySetupForPrepare = storySetupRef.current ?? ""
+
+          let prepareResult: StoryConfig
+          try {
+            const res = await fetch("/api/prepare-story", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                storySetup: storySetupForPrepare,
+                transcript: transcriptForPrepare,
+              }),
+            })
+            if (!res.ok) throw new Error("Prepare story failed")
+            const data = (await res.json()) as StoryConfig
+            prepareResult = {
+              shortPlot: data.shortPlot ?? "",
+              lucideIconNames: Array.isArray(data.lucideIconNames)
+                ? data.lucideIconNames.filter(
+                    (x): x is string => typeof x === "string",
+                  )
+                : [],
+              voiceName:
+                typeof data.voiceName === "string" ? data.voiceName : "Zephyr",
+            }
+          } catch {
+            prepareResult = {
+              shortPlot: "",
+              lucideIconNames: [],
+              voiceName: "Zephyr",
+            }
+          }
+
+          setStoryConfig(prepareResult)
+          setStoryStarted(true)
+          storyConfigRef.current = prepareResult
+          replacingWithStoryRef.current = true
+
           const functionResponses = toolCall.functionCalls.map((fc) => ({
             id: fc.id,
             name: fc.name,
             response: { result: "ok" } as Record<string, unknown>,
             scheduling: FunctionResponseScheduling.WHEN_IDLE,
           }))
-          await new Promise((r) => setTimeout(r, 10_000))
           session.sendToolResponse({ functionResponses })
-          setStoryStarted(true)
           await handleTurn()
+          sessionRef.current?.close()
+          sessionRef.current = null
+          connect()
         })
         .finally(() => {
           isHandlingTurnRef.current = false
@@ -341,6 +421,7 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     transcript,
     storySetup,
     storyStarted,
+    storyConfig,
     connect,
     disconnect,
     sendTurn,

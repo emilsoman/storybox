@@ -1,8 +1,54 @@
 import { useState } from "react"
 import ReactMarkdown from "react-markdown"
+import * as LucideIcons from "lucide-react"
 import { Phone, PhoneOff, Send } from "lucide-react"
+import type { LucideIcon } from "lucide-react"
 import { Button } from "~/components/ui/button"
-import { useGeminiLive } from "~/lib/useGeminiLive"
+import { useGeminiLive, type StoryConfig } from "~/lib/useGeminiLive"
+
+function StoryPreparedSection({ config }: { config: StoryConfig }) {
+  const iconMap = LucideIcons as unknown as Record<
+    string,
+    LucideIcon | undefined
+  >
+  return (
+    <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
+      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+        Prepared story
+      </p>
+      {config.shortPlot && (
+        <div>
+          <p className="text-xs font-medium text-muted-foreground mb-1">Plot</p>
+          <p className="text-sm">{config.shortPlot}</p>
+        </div>
+      )}
+      {config.lucideIconNames.length > 0 && (
+        <div className="flex flex-wrap gap-2 items-center">
+          <p className="text-xs font-medium text-muted-foreground w-full mb-1">
+            Icons
+          </p>
+          {config.lucideIconNames.map((name) => {
+            const Icon = iconMap[name]
+            if (!Icon) return null
+            return (
+              <span
+                key={name}
+                className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2"
+                title={name}
+              >
+                <Icon className="size-5" />
+              </span>
+            )
+          })}
+        </div>
+      )}
+      <p className="text-sm">
+        <span className="text-muted-foreground">Narrator voice: </span>
+        <strong>{config.voiceName}</strong>
+      </p>
+    </div>
+  )
+}
 
 export function VoiceChat() {
   const [inputText, setInputText] = useState("")
@@ -12,6 +58,7 @@ export function VoiceChat() {
     transcript,
     storySetup,
     storyStarted,
+    storyConfig,
     connect,
     disconnect,
     sendTurn,
@@ -104,6 +151,8 @@ export function VoiceChat() {
             Story started!
           </div>
         )}
+
+        {storyConfig && <StoryPreparedSection config={storyConfig} />}
 
         {storySetup != null && storySetup !== "" && (
           <div className="rounded-lg border border-border bg-muted/30 p-4">
