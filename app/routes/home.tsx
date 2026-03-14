@@ -1,13 +1,17 @@
-import type { Route } from "./+types/home";
-import { Welcome } from "../welcome/welcome";
+import type { Route } from "./+types/home"
+import { VoiceChat } from "~/components/VoiceChat"
 
 export function meta({}: Route.MetaArgs) {
   return [
-    { title: "New React Router App" },
-    { name: "description", content: "Welcome to React Router!" },
-  ];
+    { title: "Live Storybook – Set up your story" },
+    {
+      name: "description",
+      content:
+        "Set up your story with the Gemini agent. Tell us about the characters and what happens.",
+    },
+  ]
 }
 
 export default function Home() {
-  return <Welcome />;
+  return <VoiceChat />
 }

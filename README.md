@@ -6,6 +6,7 @@ A modern, production-ready template for building full-stack React applications u
 
 ## Features
 
+- 🎙️ **Gemini Live Voice** – Real-time voice chat with the Gemini agent via the [Live API](https://ai.google.dev/gemini-api/docs/live-api/get-started-sdk)
 - 🚀 Server-side rendering
 - ⚡️ Hot Module Replacement (HMR)
 - 📦 Asset bundling and optimization
@@ -33,6 +34,13 @@ npm run dev
 ```
 
 Your application will be available at `http://localhost:5173`.
+
+### Gemini Live Voice Chat
+
+1. Get a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey).
+2. Copy `.env.example` to `.env` and set `GEMINI_API_KEY`. The key stays on the server; the app uses ephemeral tokens for the Live API and never sends the key to the client.
+3. Run `npm run dev`, open the app, and click **Start story setup**.
+4. Allow microphone access when prompted. Talk to the agent to set up your story; use **Mute** to stop sending your mic without ending the call.
 
 ## Building for Production
 
