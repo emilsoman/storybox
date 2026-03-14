@@ -8,7 +8,7 @@ import {
   stopPlayback,
 } from "~/lib/audio-utils"
 
-const MODEL = "gemini-2.5-flash"
+const MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 
 const STORY_SETUP_SYSTEM_INSTRUCTION = `You are a friendly story co-creator helping someone set up a kids' storybook. Your job is to collect a clear "story thread": who the characters are, where the story takes place, the tone (e.g. funny, gentle, adventurous), and any plot ideas they have.
 
@@ -19,6 +19,7 @@ export type ConnectionState = "disconnected" | "connecting" | "connected"
 export type UseGeminiLiveReturn = {
   connectionState: ConnectionState
   error: string | null
+  /** Combined transcript: "You: …" and "Story setup: …" lines from input/output transcription */
   transcript: string
   connect: () => void
   disconnect: () => void
@@ -31,7 +32,7 @@ export function useGeminiLive(): UseGeminiLiveReturn {
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("disconnected")
   const [error, setError] = useState<string | null>(null)
-  const [transcript, setTranscript] = useState("")
+  const [transcriptLines, setTranscriptLines] = useState<string[]>([])
   const [isMuted, setIsMuted] = useState(false)
 
   const sessionRef = useRef<Awaited<
@@ -53,7 +54,7 @@ export function useGeminiLive(): UseGeminiLiveReturn {
     stopPlayback()
     setConnectionState("disconnected")
     setError(null)
-    setTranscript("")
+    setTranscriptLines([])
   }, [])
 
   const connect = useCallback(() => {
@@ -109,6 +110,8 @@ export function useGeminiLive(): UseGeminiLiveReturn {
               prebuiltVoiceConfig: { voiceName: "Puck" },
             },
           },
+          outputAudioTranscription: {},
+          inputAudioTranscription: {},
           // Long sessions: audio tokens accumulate ~25/sec; compression keeps context bounded
           contextWindowCompression: { slidingWindow: {} },
         },
@@ -119,6 +122,8 @@ export function useGeminiLive(): UseGeminiLiveReturn {
           onmessage: (message: {
             serverContent?: {
               interrupted?: boolean
+              outputTranscription?: { text?: string }
+              inputTranscription?: { text?: string }
               modelTurn?: {
                 parts?: Array<{
                   text?: string
@@ -133,10 +138,25 @@ export function useGeminiLive(): UseGeminiLiveReturn {
             if (content.interrupted) {
               clearPlaybackBuffer()
             }
+            if (content.outputTranscription?.text) {
+              setTranscriptLines((prev) => [
+                ...prev,
+                `Story setup: ${content.outputTranscription!.text}`,
+              ])
+            }
+            if (content.inputTranscription?.text) {
+              setTranscriptLines((prev) => [
+                ...prev,
+                `You: ${content.inputTranscription!.text}`,
+              ])
+            }
             const parts = content.modelTurn?.parts ?? []
             for (const part of parts) {
               if (part.text) {
-                setTranscript((prev) => prev + part.text)
+                setTranscriptLines((prev) => [
+                  ...prev,
+                  `Story setup: ${part.text}`,
+                ])
               }
               if (part.inlineData?.data) {
                 playPcm24kBase64(part.inlineData.data)
@@ -176,6 +196,8 @@ export function useGeminiLive(): UseGeminiLiveReturn {
 
   const startMute = useCallback(() => setIsMuted(true), [])
   const stopMute = useCallback(() => setIsMuted(false), [])
+
+  const transcript = transcriptLines.join("\n\n")
 
   return {
     connectionState,
