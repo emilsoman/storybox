@@ -34,7 +34,7 @@ When you have collected enough story setup (characters, setting, tone, plot idea
 const START_STORY_TOOL = {
   name: "start_story",
   description:
-    "Call this when the story setup is complete to start the story. The app will prepare; you should keep talking for about 10 seconds to build anticipation.",
+    "Call this when the story setup is complete to start the story. The app will prepare and return the story plot in the tool response. Use that plot to build anticipation—tell the audience what the story is about (from the plot you receive), don't make things up.",
   behavior: Behavior.NON_BLOCKING,
 } as const
 
@@ -291,6 +291,13 @@ export function useGeminiLive(): UseGeminiLiveReturn {
       })
       .then((session) => {
         sessionRef.current = session
+        if (storyConfigRef.current) {
+          setTranscriptLines((prev) => [
+            ...prev,
+            { role: "user", text: "Start the story." },
+          ])
+          session.sendClientContent({ turns: ["Start the story."] })
+        }
       })
       .catch((err) => {
         const message = err instanceof Error ? err.message : "Failed to connect"
@@ -394,7 +401,10 @@ export function useGeminiLive(): UseGeminiLiveReturn {
           const functionResponses = toolCall.functionCalls.map((fc) => ({
             id: fc.id,
             name: fc.name,
-            response: { result: "ok" } as Record<string, unknown>,
+            response: {
+              result: "ok",
+              plot: prepareResult.shortPlot,
+            } as Record<string, unknown>,
             scheduling: FunctionResponseScheduling.WHEN_IDLE,
           }))
           session.sendToolResponse({ functionResponses })
