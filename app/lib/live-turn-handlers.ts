@@ -84,14 +84,18 @@ export function createHandleTurnSetup(
   return async function handleTurnSetup(): Promise<LiveServerMessage | null> {
     let done = false
     let lastMessage: LiveServerMessage | null = null
+    let toolCallMessage: LiveServerMessage | null = null
     while (!done) {
       const message = await waitMessage()
       lastMessage = message
-      if (message.serverContent?.turnComplete || message.toolCall) {
+      if (message.toolCall) {
+        toolCallMessage = message
+      }
+      if (message.serverContent?.turnComplete) {
         done = true
       }
     }
-    return lastMessage
+    return toolCallMessage ?? lastMessage
   }
 }
 
