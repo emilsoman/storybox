@@ -24,6 +24,7 @@ import {
   createHandleTurnNarrator,
   createWaitMessage,
 } from "~/lib/live-turn-handlers"
+import { createMicrophoneCapture } from "~/lib/microphone-capture"
 
 export type { UseNarratorAgentReturn }
 
@@ -60,8 +61,12 @@ export function useNarratorAgent(
       storyConfig?.illustrationStyle?.trim() ||
       DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
   )
+  const [isMicrophoneOn, setIsMicrophoneOn] = useState(false)
 
   const sessionRef = useRef<Session | null>(null)
+  const microphoneCaptureRef = useRef<ReturnType<
+    typeof createMicrophoneCapture
+  > | null>(null)
   const currentPageRef = useRef(currentPage)
   currentPageRef.current = currentPage
   const currentCharactersRef = useRef(currentCharacters)
@@ -81,6 +86,9 @@ export function useNarratorAgent(
   fetcherRef.current = fetcher
 
   const disconnect = useCallback(() => {
+    microphoneCaptureRef.current?.stop()
+    microphoneCaptureRef.current = null
+    setIsMicrophoneOn(false)
     sessionRef.current?.close()
     sessionRef.current = null
     handleTurnNarratorRef.current = null
@@ -209,6 +217,7 @@ export function useNarratorAgent(
             },
           },
           outputAudioTranscription: {},
+          inputAudioTranscription: {},
           contextWindowCompression: {
             triggerTokens: "104857",
             slidingWindow: { targetTokens: "52428" },
@@ -220,6 +229,7 @@ export function useNarratorAgent(
           },
           onmessage: (message: LiveServerMessage) => {
             queueRef.current.push(message)
+            handleModelTurn(message)
           },
           onerror: (e: ErrorEvent) => {
             if (mountedRef.current) {
@@ -352,6 +362,45 @@ export function useNarratorAgent(
     [nextPage, transcriptLines],
   )
 
+  const startMicrophone = useCallback(async () => {
+    const session = sessionRef.current
+    if (!session) return
+    try {
+      if (!microphoneCaptureRef.current) {
+        microphoneCaptureRef.current = createMicrophoneCapture()
+      }
+      const sendChunk = (base64: string) => {
+        sessionRef.current?.sendRealtimeInput({
+          audio: { data: base64, mimeType: "audio/pcm;rate=16000" },
+        })
+      }
+      await microphoneCaptureRef.current.start(sendChunk)
+      setIsMicrophoneOn(true)
+    } catch (e) {
+      if (mountedRef.current) {
+        setError(e instanceof Error ? e.message : "Microphone access failed")
+      }
+    }
+  }, [])
+
+  const stopMicrophone = useCallback(() => {
+    microphoneCaptureRef.current?.stop()
+    microphoneCaptureRef.current = null
+    setIsMicrophoneOn(false)
+  }, [])
+
+  const sendImage = useCallback((base64: string, mimeType?: string) => {
+    const session = sessionRef.current
+    if (!session) return
+    session.sendRealtimeInput({
+      video: { data: base64, mimeType: mimeType ?? "image/jpeg" },
+    })
+  }, [])
+
+  const reportError = useCallback((message: string) => {
+    setError(message)
+  }, [])
+
   const transcript = transcriptLines
     .map((e) => `${e.role === "user" ? "You" : "Agent"}: ${e.text}`)
     .join("\n\n")
@@ -369,5 +418,10 @@ export function useNarratorAgent(
     connect,
     disconnect,
     sendTurn,
+    isMicrophoneOn,
+    startMicrophone,
+    stopMicrophone,
+    sendImage,
+    reportError,
   }
 }

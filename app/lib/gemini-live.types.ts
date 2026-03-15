@@ -33,6 +33,12 @@ export type UseStorySetupAgentReturn = {
   connect: () => void
   disconnect: () => void
   sendTurn: (text: string) => void
+  isMicrophoneOn: boolean
+  startMicrophone: () => Promise<void>
+  stopMicrophone: () => void
+  sendImage: (base64: string, mimeType?: string) => void
+  /** Report an error message (e.g. camera permission) to show in the existing error state. */
+  reportError: (message: string) => void
 }
 
 export type UseNarratorAgentReturn = {
@@ -52,6 +58,12 @@ export type UseNarratorAgentReturn = {
   connect: () => void
   disconnect: () => void
   sendTurn: (text: string) => void
+  isMicrophoneOn: boolean
+  startMicrophone: () => Promise<void>
+  stopMicrophone: () => void
+  sendImage: (base64: string, mimeType?: string) => void
+  /** Report an error message (e.g. camera permission) to show in the existing error state. */
+  reportError: (message: string) => void
 }
 
 export type Session = Awaited<

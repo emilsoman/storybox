@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react"
 import { useStorySetupAgent } from "~/lib/useStorySetupAgent"
 import { useNarratorAgent } from "~/lib/useNarratorAgent"
 import { StorySetupView } from "~/components/StorySetupView"
@@ -47,6 +48,18 @@ export function VoiceChat() {
   const setup = useStorySetupAgent()
   const narrator = useNarratorAgent(setup.storyConfig)
   const isNarrator = setup.storyConfig != null && setup.setupDone
+  const didAutoConnectRef = useRef(false)
+
+  useEffect(() => {
+    if (isNarrator) {
+      if (!didAutoConnectRef.current) {
+        didAutoConnectRef.current = true
+        narrator.connect()
+      }
+    } else {
+      didAutoConnectRef.current = false
+    }
+  }, [isNarrator, narrator.connect])
 
   return (
     <main className="min-h-screen h-screen bg-background flex flex-col overflow-hidden p-0">

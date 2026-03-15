@@ -24,6 +24,7 @@ import {
   createHandleTurnSetup,
   createWaitMessage,
 } from "~/lib/live-turn-handlers"
+import { createMicrophoneCapture } from "~/lib/microphone-capture"
 
 export type { UseStorySetupAgentReturn }
 
@@ -35,8 +36,12 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
   const [storySetup, setStorySetup] = useState<string | null>(null)
   const [storyConfig, setStoryConfig] = useState<StoryConfig | null>(null)
   const [setupDone, setSetupDone] = useState(false)
+  const [isMicrophoneOn, setIsMicrophoneOn] = useState(false)
 
   const sessionRef = useRef<Session | null>(null)
+  const microphoneCaptureRef = useRef<ReturnType<
+    typeof createMicrophoneCapture
+  > | null>(null)
   const storySetupAbortRef = useRef<AbortController | null>(null)
   const queueRef = useRef<LiveServerMessage[]>([])
   const audioPartsRef = useRef<string[]>([])
@@ -49,12 +54,19 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
   const transcriptLinesRef = useRef<TranscriptEntry[]>([])
   const storySetupRef = useRef<string | null>(null)
   const isTransitioningToNarratorRef = useRef(false)
+  const startStoryHandledRef = useRef(false)
+  const runStartStoryTransitionRef = useRef<
+    ((toolCall: NonNullable<LiveServerMessage["toolCall"]>) => void) | null
+  >(null)
   transcriptLinesRef.current = transcriptLines
   storySetupRef.current = storySetup
 
   const fetcher = useFetcher<{ token?: string; error?: string }>()
 
   const disconnect = useCallback(() => {
+    microphoneCaptureRef.current?.stop()
+    microphoneCaptureRef.current = null
+    setIsMicrophoneOn(false)
     sessionRef.current?.close()
     sessionRef.current = null
     handleTurnSetupRef.current = null
@@ -69,6 +81,7 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
     setStorySetup(null)
     setStoryConfig(null)
     setSetupDone(false)
+    startStoryHandledRef.current = false
   }, [])
 
   const connect = useCallback(async () => {
@@ -129,6 +142,88 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
     const handleTurnSetup = createHandleTurnSetup(waitMessage)
     handleTurnSetupRef.current = handleTurnSetup
 
+    runStartStoryTransitionRef.current = (toolCall) => {
+      if (startStoryHandledRef.current) return
+      if (!toolCall.functionCalls?.length) return
+      startStoryHandledRef.current = true
+      const session = sessionRef.current
+      if (!session) return
+      const functionCalls = toolCall.functionCalls!
+      ;(async () => {
+        const transcriptForPrepare = transcriptLinesRef.current
+          .map((e) => `${e.role === "user" ? "You" : "Agent"}: ${e.text}`)
+          .join("\n\n")
+        const storySetupForPrepare = storySetupRef.current ?? ""
+        let prepareResult: StoryConfig
+        try {
+          const res = await fetch("/api/prepare-story", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              storySetup: storySetupForPrepare,
+              transcript: transcriptForPrepare,
+            }),
+          })
+          if (!res.ok) throw new Error("Prepare story failed")
+          const data = (await res.json()) as StoryConfig & {
+            characters?: unknown
+            illustrationStyle?: string
+          }
+          const rawChars = Array.isArray(data.characters) ? data.characters : []
+          const characters: string[] = rawChars.filter(
+            (x): x is string => typeof x === "string",
+          )
+          prepareResult = {
+            shortPlot: data.shortPlot ?? "",
+            voiceName:
+              typeof data.voiceName === "string" ? data.voiceName : "Zephyr",
+            characters: characters.length > 0 ? characters : undefined,
+            illustrationStyle:
+              typeof data.illustrationStyle === "string" &&
+              data.illustrationStyle.trim()
+                ? data.illustrationStyle.trim()
+                : undefined,
+            ...(typeof data.coverImageBase64 === "string" &&
+              data.coverImageBase64 && {
+                coverImageBase64: data.coverImageBase64,
+                coverImageMimeType:
+                  typeof data.coverImageMimeType === "string"
+                    ? data.coverImageMimeType
+                    : "image/png",
+              }),
+          }
+        } catch {
+          prepareResult = { shortPlot: "", voiceName: "Zephyr" }
+        }
+        setStoryConfig(prepareResult)
+        const functionResponses = functionCalls.map((fc) => ({
+          id: fc.id,
+          name: fc.name,
+          response: {
+            result: "ok",
+            plot: prepareResult.shortPlot,
+          } as Record<string, unknown>,
+          scheduling: FunctionResponseScheduling.WHEN_IDLE,
+        }))
+        sessionRef.current?.sendToolResponse({ functionResponses })
+        await handleTurnSetupRef.current?.()
+        setSetupDone(true)
+        isTransitioningToNarratorRef.current = true
+        sessionRef.current?.close()
+        sessionRef.current = null
+        handleTurnSetupRef.current = null
+        queueRef.current = []
+        audioPartsRef.current = []
+        storySetupAbortRef.current?.abort()
+        storySetupAbortRef.current = null
+        stopPlayback()
+        setConnectionState("disconnected")
+        setError(null)
+        setTranscriptLines([])
+        setStorySetup(null)
+      })().catch(() => {})
+    }
+
     ai.live
       .connect({
         model: MODEL,
@@ -144,6 +239,7 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
             },
           },
           outputAudioTranscription: {},
+          inputAudioTranscription: {},
           contextWindowCompression: {
             triggerTokens: "104857",
             slidingWindow: { targetTokens: "52428" },
@@ -156,6 +252,14 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
           },
           onmessage: (message: LiveServerMessage) => {
             queueRef.current.push(message)
+            handleModelTurn(message)
+            if (
+              message.toolCall?.functionCalls?.some(
+                (fc) => fc.name === "start_story",
+              )
+            ) {
+              runStartStoryTransitionRef.current?.(message.toolCall)
+            }
           },
           onerror: (e: ErrorEvent) => {
             setError(e?.message ?? "Connection error")
@@ -231,93 +335,14 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
       if (!handleTurnSetup) return
       isHandlingTurnRef.current = true
       handleTurnSetup()
-        .then(async (lastMessage) => {
+        .then((lastMessage) => {
           const toolCall = lastMessage?.toolCall
           if (!sessionRef.current || !toolCall?.functionCalls?.length) return
           const isStartStory = toolCall.functionCalls.some(
             (fc) => fc.name === "start_story",
           )
           if (!isStartStory) return
-
-          const transcriptForPrepare = transcriptLinesRef.current
-            .map((e) => `${e.role === "user" ? "You" : "Agent"}: ${e.text}`)
-            .join("\n\n")
-          const storySetupForPrepare = storySetupRef.current ?? ""
-
-          let prepareResult: StoryConfig
-          try {
-            const res = await fetch("/api/prepare-story", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                storySetup: storySetupForPrepare,
-                transcript: transcriptForPrepare,
-              }),
-            })
-            if (!res.ok) throw new Error("Prepare story failed")
-            const data = (await res.json()) as StoryConfig & {
-              characters?: unknown
-              illustrationStyle?: string
-            }
-            const rawChars = Array.isArray(data.characters)
-              ? data.characters
-              : []
-            const characters: string[] = rawChars.filter(
-              (x): x is string => typeof x === "string",
-            )
-            prepareResult = {
-              shortPlot: data.shortPlot ?? "",
-              voiceName:
-                typeof data.voiceName === "string" ? data.voiceName : "Zephyr",
-              characters: characters.length > 0 ? characters : undefined,
-              illustrationStyle:
-                typeof data.illustrationStyle === "string" &&
-                data.illustrationStyle.trim()
-                  ? data.illustrationStyle.trim()
-                  : undefined,
-              ...(typeof data.coverImageBase64 === "string" &&
-                data.coverImageBase64 && {
-                  coverImageBase64: data.coverImageBase64,
-                  coverImageMimeType:
-                    typeof data.coverImageMimeType === "string"
-                      ? data.coverImageMimeType
-                      : "image/png",
-                }),
-            }
-          } catch {
-            prepareResult = {
-              shortPlot: "",
-              voiceName: "Zephyr",
-            }
-          }
-
-          setStoryConfig(prepareResult)
-
-          const functionResponses = toolCall.functionCalls.map((fc) => ({
-            id: fc.id,
-            name: fc.name,
-            response: {
-              result: "ok",
-              plot: prepareResult.shortPlot,
-            } as Record<string, unknown>,
-            scheduling: FunctionResponseScheduling.WHEN_IDLE,
-          }))
-          sessionRef.current?.sendToolResponse({ functionResponses })
-          await handleTurnSetupRef.current?.()
-          setSetupDone(true)
-          isTransitioningToNarratorRef.current = true
-          sessionRef.current?.close()
-          sessionRef.current = null
-          handleTurnSetupRef.current = null
-          queueRef.current = []
-          audioPartsRef.current = []
-          storySetupAbortRef.current?.abort()
-          storySetupAbortRef.current = null
-          stopPlayback()
-          setConnectionState("disconnected")
-          setError(null)
-          setTranscriptLines([])
-          setStorySetup(null)
+          runStartStoryTransitionRef.current?.(toolCall)
         })
         .finally(() => {
           isHandlingTurnRef.current = false
@@ -326,6 +351,43 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
     },
     [transcriptLines, disconnect],
   )
+
+  const startMicrophone = useCallback(async () => {
+    const session = sessionRef.current
+    if (!session) return
+    try {
+      if (!microphoneCaptureRef.current) {
+        microphoneCaptureRef.current = createMicrophoneCapture()
+      }
+      const sendChunk = (base64: string) => {
+        sessionRef.current?.sendRealtimeInput({
+          audio: { data: base64, mimeType: "audio/pcm;rate=16000" },
+        })
+      }
+      await microphoneCaptureRef.current.start(sendChunk)
+      setIsMicrophoneOn(true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Microphone access failed")
+    }
+  }, [])
+
+  const stopMicrophone = useCallback(() => {
+    microphoneCaptureRef.current?.stop()
+    microphoneCaptureRef.current = null
+    setIsMicrophoneOn(false)
+  }, [])
+
+  const sendImage = useCallback((base64: string, mimeType?: string) => {
+    const session = sessionRef.current
+    if (!session) return
+    session.sendRealtimeInput({
+      video: { data: base64, mimeType: mimeType ?? "image/jpeg" },
+    })
+  }, [])
+
+  const reportError = useCallback((message: string) => {
+    setError(message)
+  }, [])
 
   const transcript = transcriptLines
     .map((e) => `${e.role === "user" ? "You" : "Agent"}: ${e.text}`)
@@ -342,5 +404,10 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
     connect,
     disconnect,
     sendTurn,
+    isMicrophoneOn,
+    startMicrophone,
+    stopMicrophone,
+    sendImage,
+    reportError,
   }
 }

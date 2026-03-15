@@ -24,6 +24,21 @@ export function createHandleModelTurn(
       audioPartsRef.current = []
     }
 
+    if (content.inputTranscription?.text) {
+      const chunk = content.inputTranscription.text
+      const finished = content.inputTranscription.finished ?? false
+      setTranscriptLines((prev) => {
+        const last = prev[prev.length - 1]
+        if (last?.role === "user" && !finished) {
+          return [
+            ...prev.slice(0, -1),
+            { role: "user", text: last.text + chunk },
+          ]
+        }
+        return [...prev, { role: "user", text: chunk }]
+      })
+    }
+
     if (content.outputTranscription?.text) {
       const chunk = content.outputTranscription.text
       setTranscriptLines((prev) => {
@@ -58,16 +73,22 @@ export function createHandleModelTurn(
   }
 }
 
+/**
+ * Returns a function that waits for the next message in the queue (pop only).
+ * Messages are processed in onmessage when they arrive, so we do not call
+ * handleModelTurn here — this is only used by the turn loop to wait for
+ * turnComplete. Audio-only input triggers agent turns that are processed
+ * as soon as they arrive via onmessage.
+ */
 export function createWaitMessage(
   queueRef: MutableRefObject<LiveServerMessage[]>,
-  handleModelTurn: (message: LiveServerMessage) => void,
+  _handleModelTurn: (message: LiveServerMessage) => void,
 ): () => Promise<LiveServerMessage> {
   return function waitMessage(): Promise<LiveServerMessage> {
     return new Promise((resolve) => {
       const check = () => {
         const message = queueRef.current.shift()
         if (message) {
-          handleModelTurn(message)
           resolve(message)
           return
         }

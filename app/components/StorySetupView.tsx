@@ -1,8 +1,9 @@
 import { useState } from "react"
-import { Phone, PhoneOff, Send } from "lucide-react"
+import { Mic, MicOff, Phone, PhoneOff, Send, Camera } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { cn } from "~/lib/utils"
 import type { UseStorySetupAgentReturn } from "~/lib/gemini-live.types"
+import { takePicture } from "~/lib/camera-capture"
 
 export function StorySetupView({
   connectionState,
@@ -11,8 +12,14 @@ export function StorySetupView({
   connect,
   disconnect,
   sendTurn,
+  isMicrophoneOn,
+  startMicrophone,
+  stopMicrophone,
+  sendImage,
+  reportError,
 }: UseStorySetupAgentReturn) {
   const [inputText, setInputText] = useState("")
+  const [isTakingPicture, setIsTakingPicture] = useState(false)
 
   const handleConnect = () => {
     if (connectionState === "connected") {
@@ -27,6 +34,27 @@ export function StorySetupView({
     if (!text) return
     sendTurn(text)
     setInputText("")
+  }
+
+  const handleMicToggle = () => {
+    if (isMicrophoneOn) {
+      stopMicrophone()
+    } else {
+      startMicrophone()
+    }
+  }
+
+  const handleTakePicture = async () => {
+    if (isTakingPicture) return
+    setIsTakingPicture(true)
+    try {
+      const { base64, mimeType } = await takePicture()
+      sendImage(base64, mimeType)
+    } catch (e) {
+      reportError(e instanceof Error ? e.message : "Camera access failed")
+    } finally {
+      setIsTakingPicture(false)
+    }
   }
 
   const agentLines = transcriptLines.filter((e) => e.role === "agent")
@@ -75,26 +103,55 @@ export function StorySetupView({
         </Button>
 
         {connectionState === "connected" && (
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSend()}
-              placeholder="Type your message…"
-              className="flex-1 min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            />
-            <Button
-              type="button"
-              variant="secondary"
-              size="icon"
-              onClick={handleSend}
-              disabled={!inputText.trim()}
-              aria-label="Send"
-            >
-              <Send className="size-5" />
-            </Button>
-          </div>
+          <>
+            <div className="flex gap-2 items-center">
+              <Button
+                type="button"
+                variant={isMicrophoneOn ? "default" : "secondary"}
+                size="icon"
+                onClick={handleMicToggle}
+                aria-label={
+                  isMicrophoneOn ? "Turn microphone off" : "Turn microphone on"
+                }
+                title={isMicrophoneOn ? "Microphone on" : "Microphone off"}
+              >
+                {isMicrophoneOn ? (
+                  <Mic className="size-5" />
+                ) : (
+                  <MicOff className="size-5" />
+                )}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="icon"
+                onClick={handleTakePicture}
+                disabled={isTakingPicture}
+                aria-label="Take picture"
+                title="Take picture"
+              >
+                <Camera className="size-5" />
+              </Button>
+              <input
+                type="text"
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSend()}
+                placeholder="Type your message…"
+                className="flex-1 min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                size="icon"
+                onClick={handleSend}
+                disabled={!inputText.trim()}
+                aria-label="Send"
+              >
+                <Send className="size-5" />
+              </Button>
+            </div>
+          </>
         )}
       </div>
 
