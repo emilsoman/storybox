@@ -282,6 +282,11 @@ export function useNarratorAgent(
           currentShortPlot: pageToUse.shortPlot,
           characters: currentCharactersRef.current,
           illustrationStyle: currentIllustrationStyleRef.current,
+          ...(pageToUse.coverImageBase64 &&
+            pageToUse.coverImageMimeType && {
+              currentPageImageBase64: pageToUse.coverImageBase64,
+              currentPageImageMimeType: pageToUse.coverImageMimeType,
+            }),
         }),
       })
         .then((res) =>

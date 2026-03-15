@@ -64,6 +64,8 @@ export async function action({ request }: ActionArgs) {
     storySetup?: string
     characters?: unknown
     illustrationStyle?: string
+    currentPageImageBase64?: string
+    currentPageImageMimeType?: string
   }
   try {
     body = await request.json()
@@ -79,6 +81,18 @@ export async function action({ request }: ActionArgs) {
     typeof body.illustrationStyle === "string" && body.illustrationStyle.trim()
       ? body.illustrationStyle.trim()
       : ""
+  const currentPageImageBase64 =
+    typeof body.currentPageImageBase64 === "string" &&
+    body.currentPageImageBase64.trim() !== ""
+      ? body.currentPageImageBase64.trim()
+      : undefined
+  const currentPageImageMimeType =
+    typeof body.currentPageImageMimeType === "string" &&
+    body.currentPageImageMimeType.trim() !== ""
+      ? body.currentPageImageMimeType.trim()
+      : undefined
+  const hasCurrentPageImage =
+    currentPageImageBase64 != null && currentPageImageMimeType != null
   const characters = Array.isArray(body.characters)
     ? (body.characters as unknown[]).filter(
         (x): x is string => typeof x === "string",
@@ -118,14 +132,33 @@ ${storySetup ? `\nOriginal story setup:\n${storySetup}` : ""}`
       stylePrefix,
       result.shortPlot,
     )
-    const imagePrompt = `Create a single children's storybook illustration for this page. No text or words in the image. ${imagePromptContent}`
+    const consistencyInstruction = hasCurrentPageImage
+      ? " Keep characters and art style consistent with the illustration in the previous image."
+      : ""
+    const imagePrompt = `Create a single children's storybook illustration for this page. No text or words in the image.${consistencyInstruction} ${imagePromptContent}`
 
     let nextCoverImageBase64: string | undefined
     let nextCoverImageMimeType: string | undefined
     try {
+      const imageContents = hasCurrentPageImage
+        ? [
+            {
+              role: "user" as const,
+              parts: [
+                {
+                  inlineData: {
+                    data: currentPageImageBase64,
+                    mimeType: currentPageImageMimeType ?? "image/png",
+                  },
+                },
+                { text: imagePrompt },
+              ],
+            },
+          ]
+        : imagePrompt
       const imageResponse = await client.models.generateContent({
         model: IMAGE_MODEL,
-        contents: imagePrompt,
+        contents: imageContents,
       })
       type ImagePart = { inlineData?: { data?: string; mimeType?: string } }
       type ImageContent = { content?: { parts?: ImagePart[] } }
