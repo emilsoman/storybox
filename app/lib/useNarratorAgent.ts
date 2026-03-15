@@ -69,6 +69,11 @@ export function useNarratorAgent(
   > | null>(null)
   const currentPageRef = useRef(currentPage)
   currentPageRef.current = currentPage
+  const nextPageRef = useRef(nextPage)
+  nextPageRef.current = nextPage
+  const isMicrophoneOnRef = useRef(isMicrophoneOn)
+  isMicrophoneOnRef.current = isMicrophoneOn
+  const liveTranscriptRef = useRef<TranscriptEntry[]>([])
   const currentCharactersRef = useRef(currentCharacters)
   currentCharactersRef.current = currentCharacters
   const currentIllustrationStyleRef = useRef(currentIllustrationStyle)
@@ -94,6 +99,7 @@ export function useNarratorAgent(
     handleTurnNarratorRef.current = null
     queueRef.current = []
     audioPartsRef.current = []
+    liveTranscriptRef.current = []
     stopPlayback()
     setConnectionState("disconnected")
     setError(null)
@@ -193,6 +199,7 @@ export function useNarratorAgent(
 
     const handleModelTurn = createHandleModelTurn({
       setTranscriptLines,
+      liveTranscriptRef,
       audioPartsRef,
       mimeTypeRef,
     })
@@ -230,6 +237,91 @@ export function useNarratorAgent(
           onmessage: (message: LiveServerMessage) => {
             queueRef.current.push(message)
             handleModelTurn(message)
+            // When audio input drives a turn, sendTurn() is never called, so we
+            // must handle page advancement and next-page prefetch here instead.
+            if (
+              message.serverContent?.turnComplete &&
+              isMicrophoneOnRef.current &&
+              !isHandlingTurnRef.current
+            ) {
+              const currentNextPage = nextPageRef.current
+              const pageToUse = currentNextPage ?? currentPageRef.current
+              if (currentNextPage) {
+                setCurrentPage(currentNextPage)
+                setNextPage(null)
+                setNextPageReady(false)
+              }
+              const transcriptForApi = liveTranscriptRef.current
+                .map((e) => `${e.role === "user" ? "You" : "Agent"}: ${e.text}`)
+                .join("\n\n")
+              fetch("/api/prepare-next-page", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  transcript: transcriptForApi,
+                  currentShortPlot: pageToUse.shortPlot,
+                  characters: currentCharactersRef.current,
+                  illustrationStyle: currentIllustrationStyleRef.current,
+                  ...(pageToUse.coverImageBase64 &&
+                    pageToUse.coverImageMimeType && {
+                      currentPageImageBase64: pageToUse.coverImageBase64,
+                      currentPageImageMimeType: pageToUse.coverImageMimeType,
+                    }),
+                }),
+              })
+                .then((res) =>
+                  res.ok
+                    ? res.json()
+                    : Promise.reject(new Error("Prepare next page failed")),
+                )
+                .then(
+                  (data: {
+                    nextShortPlot?: string
+                    nextCoverImageBase64?: string
+                    nextCoverImageMimeType?: string
+                    characterUpdates?: string[]
+                  }) => {
+                    if (!mountedRef.current) return
+                    const shortPlot =
+                      typeof data.nextShortPlot === "string"
+                        ? data.nextShortPlot
+                        : ""
+                    if (shortPlot) {
+                      setNextPage({
+                        shortPlot,
+                        coverImageBase64:
+                          typeof data.nextCoverImageBase64 === "string"
+                            ? data.nextCoverImageBase64
+                            : undefined,
+                        coverImageMimeType:
+                          typeof data.nextCoverImageMimeType === "string"
+                            ? data.nextCoverImageMimeType
+                            : undefined,
+                      })
+                      setNextPageReady(true)
+                    }
+                    const updates = Array.isArray(data.characterUpdates)
+                      ? data.characterUpdates.filter(
+                          (x): x is string => typeof x === "string",
+                        )
+                      : []
+                    if (updates.length > 0) {
+                      const merged = mergeCharacterUpdates(
+                        currentCharactersRef.current,
+                        updates,
+                      )
+                      const newStyle = buildIllustrationStylePrefix(
+                        merged,
+                        currentIllustrationStyleRef.current ||
+                          DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
+                      )
+                      setCurrentCharacters(merged)
+                      setCurrentIllustrationStyle(newStyle)
+                    }
+                  },
+                )
+                .catch(() => {})
+            }
           },
           onerror: (e: ErrorEvent) => {
             if (mountedRef.current) {

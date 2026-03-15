@@ -7,6 +7,7 @@ export type HandleModelTurnDeps = {
   setTranscriptLines: (
     updater: (prev: TranscriptEntry[]) => TranscriptEntry[],
   ) => void
+  liveTranscriptRef: MutableRefObject<TranscriptEntry[]>
   audioPartsRef: MutableRefObject<string[]>
   mimeTypeRef: MutableRefObject<string>
 }
@@ -14,7 +15,16 @@ export type HandleModelTurnDeps = {
 export function createHandleModelTurn(
   deps: HandleModelTurnDeps,
 ): (message: LiveServerMessage) => void {
-  const { setTranscriptLines, audioPartsRef, mimeTypeRef } = deps
+  const { setTranscriptLines, liveTranscriptRef, audioPartsRef, mimeTypeRef } =
+    deps
+
+  function updateTranscript(
+    updater: (prev: TranscriptEntry[]) => TranscriptEntry[],
+  ) {
+    liveTranscriptRef.current = updater(liveTranscriptRef.current)
+    setTranscriptLines(updater)
+  }
+
   return function handleModelTurn(message: LiveServerMessage): void {
     const content = message.serverContent
     if (!content) return
@@ -27,7 +37,7 @@ export function createHandleModelTurn(
     if (content.inputTranscription?.text) {
       const chunk = content.inputTranscription.text
       const finished = content.inputTranscription.finished ?? false
-      setTranscriptLines((prev) => {
+      updateTranscript((prev) => {
         const last = prev[prev.length - 1]
         if (last?.role === "user" && !finished) {
           return [
@@ -41,7 +51,7 @@ export function createHandleModelTurn(
 
     if (content.outputTranscription?.text) {
       const chunk = content.outputTranscription.text
-      setTranscriptLines((prev) => {
+      updateTranscript((prev) => {
         const last = prev[prev.length - 1]
         if (last?.role === "agent") {
           return [
