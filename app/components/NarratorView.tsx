@@ -4,7 +4,6 @@ import { Phone, PhoneOff, Send } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import type {
-  CharacterDetails,
   PageContent,
   StoryConfig,
   UseNarratorAgentReturn,
@@ -86,7 +85,7 @@ function CharacterAndStyleSection({
   characters,
   illustrationStyle,
 }: {
-  characters: CharacterDetails[]
+  characters: string[]
   illustrationStyle: string
 }) {
   if (characters.length === 0 && !illustrationStyle.trim()) return null
@@ -97,46 +96,12 @@ function CharacterAndStyleSection({
       </p>
       {characters.length > 0 && (
         <div className="space-y-3">
-          {characters.map((c) => (
+          {characters.map((desc, i) => (
             <div
-              key={c.name}
-              className="rounded-md border border-border bg-background/80 p-3 text-sm space-y-1.5"
+              key={i}
+              className="rounded-md border border-border bg-background/80 p-3 text-sm text-muted-foreground"
             >
-              <p className="font-medium text-foreground">{c.name}</p>
-              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-muted-foreground">
-                {c.age && (
-                  <>
-                    <dt className="font-medium text-muted-foreground">Age</dt>
-                    <dd>{c.age}</dd>
-                  </>
-                )}
-                {c.hair && (
-                  <>
-                    <dt className="font-medium text-muted-foreground">Hair</dt>
-                    <dd>{c.hair}</dd>
-                  </>
-                )}
-                {c.eyes && (
-                  <>
-                    <dt className="font-medium text-muted-foreground">Eyes</dt>
-                    <dd>{c.eyes}</dd>
-                  </>
-                )}
-                {c.clothing && (
-                  <>
-                    <dt className="font-medium text-muted-foreground">
-                      Clothing
-                    </dt>
-                    <dd>{c.clothing}</dd>
-                  </>
-                )}
-                {c.style && (
-                  <>
-                    <dt className="font-medium text-muted-foreground">Style</dt>
-                    <dd>{c.style}</dd>
-                  </>
-                )}
-              </dl>
+              {desc}
             </div>
           ))}
         </div>

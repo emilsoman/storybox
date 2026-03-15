@@ -7,7 +7,6 @@ import {
 } from "@google/genai/web"
 import { initializeAudio, stopPlayback } from "~/lib/audio-utils"
 import type {
-  CharacterDetails,
   ConnectionState,
   PageContent,
   Session,
@@ -37,25 +36,8 @@ function pageFromStoryConfig(config: StoryConfig | null): PageContent {
   }
 }
 
-function mergeCharacterUpdates(
-  prev: CharacterDetails[],
-  updates: CharacterDetails[],
-): CharacterDetails[] {
-  const byName = new Map(prev.map((c) => [c.name, { ...c }]))
-  for (const u of updates) {
-    if (!u.name?.trim()) continue
-    const existing = byName.get(u.name)
-    if (existing) {
-      if (u.age !== undefined) existing.age = u.age
-      if (u.hair !== undefined) existing.hair = u.hair
-      if (u.eyes !== undefined) existing.eyes = u.eyes
-      if (u.clothing !== undefined) existing.clothing = u.clothing
-      if (u.style !== undefined) existing.style = u.style
-    } else {
-      byName.set(u.name, { ...u })
-    }
-  }
-  return Array.from(byName.values())
+function mergeCharacterUpdates(prev: string[], updates: string[]): string[] {
+  return [...prev, ...updates]
 }
 
 export function useNarratorAgent(
@@ -70,9 +52,9 @@ export function useNarratorAgent(
   )
   const [nextPage, setNextPage] = useState<PageContent | null>(null)
   const [nextPageReady, setNextPageReady] = useState(false)
-  const [currentCharacters, setCurrentCharacters] = useState<
-    CharacterDetails[]
-  >(() => storyConfig?.characters ?? [])
+  const [currentCharacters, setCurrentCharacters] = useState<string[]>(
+    () => storyConfig?.characters ?? [],
+  )
   const [currentIllustrationStyle, setCurrentIllustrationStyle] = useState(
     () =>
       storyConfig?.illustrationStyle?.trim() ||
@@ -312,7 +294,7 @@ export function useNarratorAgent(
             nextShortPlot?: string
             nextCoverImageBase64?: string
             nextCoverImageMimeType?: string
-            characterUpdates?: CharacterDetails[]
+            characterUpdates?: string[]
           }) => {
             if (!mountedRef.current) return
             const shortPlot =
@@ -333,11 +315,7 @@ export function useNarratorAgent(
             }
             const updates = Array.isArray(data.characterUpdates)
               ? data.characterUpdates.filter(
-                  (c): c is CharacterDetails =>
-                    c != null &&
-                    typeof c === "object" &&
-                    "name" in c &&
-                    typeof (c as CharacterDetails).name === "string",
+                  (x): x is string => typeof x === "string",
                 )
               : []
             if (updates.length > 0) {
@@ -347,7 +325,8 @@ export function useNarratorAgent(
               )
               const newStyle = buildIllustrationStylePrefix(
                 merged,
-                DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
+                currentIllustrationStyleRef.current ||
+                  DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
               )
               setCurrentCharacters(merged)
               setCurrentIllustrationStyle(newStyle)

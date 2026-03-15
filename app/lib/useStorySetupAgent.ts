@@ -8,7 +8,6 @@ import {
 } from "@google/genai/web"
 import { initializeAudio, stopPlayback } from "~/lib/audio-utils"
 import type {
-  CharacterDetails,
   ConnectionState,
   Session,
   StoryConfig,
@@ -263,37 +262,9 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
             const rawChars = Array.isArray(data.characters)
               ? data.characters
               : []
-            const characters: CharacterDetails[] = rawChars
-              .filter(
-                (c): c is CharacterDetails =>
-                  c != null &&
-                  typeof c === "object" &&
-                  "name" in c &&
-                  typeof (c as CharacterDetails).name === "string",
-              )
-              .map((c) => ({
-                name: (c as CharacterDetails).name.trim(),
-                age:
-                  typeof (c as CharacterDetails).age === "string"
-                    ? (c as CharacterDetails).age?.trim()
-                    : undefined,
-                hair:
-                  typeof (c as CharacterDetails).hair === "string"
-                    ? (c as CharacterDetails).hair?.trim()
-                    : undefined,
-                eyes:
-                  typeof (c as CharacterDetails).eyes === "string"
-                    ? (c as CharacterDetails).eyes?.trim()
-                    : undefined,
-                clothing:
-                  typeof (c as CharacterDetails).clothing === "string"
-                    ? (c as CharacterDetails).clothing?.trim()
-                    : undefined,
-                style:
-                  typeof (c as CharacterDetails).style === "string"
-                    ? (c as CharacterDetails).style?.trim()
-                    : undefined,
-              }))
+            const characters: string[] = rawChars.filter(
+              (x): x is string => typeof x === "string",
+            )
             prepareResult = {
               shortPlot: data.shortPlot ?? "",
               lucideIconNames: Array.isArray(data.lucideIconNames)

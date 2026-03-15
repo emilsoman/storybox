@@ -1,5 +1,8 @@
-import type { CharacterDetails } from "~/lib/gemini-live.types"
-import { buildIllustrationPrompt } from "~/lib/gemini-live.types"
+import {
+  buildIllustrationPrompt,
+  buildIllustrationStylePrefix,
+  DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
+} from "~/lib/gemini-live.types"
 
 type ActionArgs = { request: Request }
 
@@ -10,28 +13,13 @@ const NEXT_PAGE_PROMPT = `You are preparing the next page of a kids' storybook. 
 
 "shortPlot": A short plot summary in 2-4 sentences for the NEXT page/section of the story. It should follow naturally from the current page and the conversation. Keep it suitable for a narrator to read aloud.
 
-"characterUpdates": (optional) An array of character objects to update for consistent illustrations. Only include when the story implies a change: a new character appears (add one with name, age?, hair?, eyes?, clothing?, style?), or an existing character's appearance changes (include only that character with updated fields). Each object must have "name" (string). Omit or use [] if nothing changed.
+"characterUpdates": (optional) An array of strings. Each string is a full character description (name and any physical/visual details) for consistent image generation—same format as in prepare-story. Only include when the story implies a change: a new character appears (add one description string), or an existing character's appearance changes (include the updated description string). Omit or use [] if nothing changed.
 
 Output only the JSON object, nothing else.`
 
-function parseCharacterDetails(raw: unknown): CharacterDetails | null {
-  if (!raw || typeof raw !== "object" || !("name" in raw)) return null
-  const o = raw as Record<string, unknown>
-  const name = typeof o.name === "string" ? o.name.trim() : ""
-  if (!name) return null
-  return {
-    name,
-    age: typeof o.age === "string" ? o.age.trim() : undefined,
-    hair: typeof o.hair === "string" ? o.hair.trim() : undefined,
-    eyes: typeof o.eyes === "string" ? o.eyes.trim() : undefined,
-    clothing: typeof o.clothing === "string" ? o.clothing.trim() : undefined,
-    style: typeof o.style === "string" ? o.style.trim() : undefined,
-  }
-}
-
 function parseNextPageResponse(text: string): {
   shortPlot: string
-  characterUpdates: CharacterDetails[]
+  characterUpdates: string[]
 } | null {
   const trimmed = text
     .trim()
@@ -47,9 +35,7 @@ function parseNextPageResponse(text: string): {
       const rawUpdates = (parsed as { characterUpdates?: unknown })
         .characterUpdates
       const characterUpdates = Array.isArray(rawUpdates)
-        ? rawUpdates
-            .map(parseCharacterDetails)
-            .filter((c): c is CharacterDetails => c !== null)
+        ? rawUpdates.filter((x): x is string => typeof x === "string")
         : []
       return { shortPlot, characterUpdates }
     }
@@ -93,6 +79,11 @@ export async function action({ request }: ActionArgs) {
     typeof body.illustrationStyle === "string" && body.illustrationStyle.trim()
       ? body.illustrationStyle.trim()
       : ""
+  const characters = Array.isArray(body.characters)
+    ? (body.characters as unknown[]).filter(
+        (x): x is string => typeof x === "string",
+      )
+    : []
 
   const { GoogleGenAI } = await import("@google/genai")
   const client = new GoogleGenAI({ apiKey: apiKey.trim() })
@@ -116,10 +107,17 @@ ${storySetup ? `\nOriginal story setup:\n${storySetup}` : ""}`
       return Response.json({ nextShortPlot: "" }, { status: 200 })
     }
 
-    const imagePromptContent =
+    const stylePrefix =
       illustrationStyle !== ""
-        ? buildIllustrationPrompt(illustrationStyle, result.shortPlot)
-        : `Create a single children's storybook illustration for this page. Style: whimsical, colorful, friendly, suitable for kids. The image should capture the mood and main idea of this page—no text or words in the image. Page: ${result.shortPlot}`
+        ? buildIllustrationStylePrefix(characters, illustrationStyle)
+        : buildIllustrationStylePrefix(
+            characters,
+            DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
+          )
+    const imagePromptContent = buildIllustrationPrompt(
+      stylePrefix,
+      result.shortPlot,
+    )
     const imagePrompt = `Create a single children's storybook illustration for this page. No text or words in the image. ${imagePromptContent}`
 
     let nextCoverImageBase64: string | undefined

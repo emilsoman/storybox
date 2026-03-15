@@ -1,8 +1,6 @@
 import type { Route } from "./+types/api.prepare-story"
-import type { CharacterDetails } from "~/lib/gemini-live.types"
 import {
   buildIllustrationPrompt,
-  buildIllustrationStylePrefix,
   DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
 } from "~/lib/gemini-live.types"
 
@@ -15,12 +13,13 @@ const VALID_VOICE_NAMES_LIST = VOICE_NAMES_WITH_TONES.split(", ")
   .map((s) => s.split(" -- ")[0].trim())
   .join(", ")
 
-const PREPARE_STORY_PROMPT = `You are preparing a kids' storybook session. Given the story setup below, output a JSON object with exactly these four keys (no other text, no markdown code fence):
+const PREPARE_STORY_PROMPT = `You are preparing a kids' storybook session. Given the story setup below, output a JSON object with exactly these five keys (no other text, no markdown code fence):
 
 1. "shortPlot": A short plot summary in 2-4 sentences that a narrator will use as the story outline.
 2. "lucideIconNames": An array of 3-5 Lucide icon names in PascalCase that fit the story (e.g. BookOpen, Sparkles, TreePine, Castle, Sun, Moon). Use only real Lucide icon names from the lucide-react library.
 3. "voiceName": The narrator voice. You must use exactly one of these names (the first word from each option): ${VALID_VOICE_NAMES_LIST}. To choose, use the tone hints: ${VOICE_NAMES_WITH_TONES}. Example: for an excitable story use "Fenrir", not "Excitable".
-4. "characters": An array of character objects for consistent illustration. Each object must have "name" (string). Optionally include "age", "hair", "eyes", "clothing", "style" (all strings). Example: [{"name": "Luma", "age": "9", "hair": "short curly black hair", "eyes": "large green eyes", "clothing": "yellow raincoat, red boots", "style": "soft watercolor children's book illustration"}]. Use an empty array [] if there are no specific characters.
+4. "characters": An array of strings. Each string is a full character description (name and any physical/visual details) for consistent image generation across pages. Example: ["Luma, 9, short curly black hair, large green eyes, yellow raincoat and red boots, soft watercolor style", "A friendly dragon with emerald scales"]. Use an empty array [] if there are no specific characters.
+5. "illustrationStyle": A short string describing the illustration style for all pages (e.g. "soft watercolor children's book illustration"). This will be used for every page image.
 
 Output only the JSON object, nothing else.`
 
@@ -28,26 +27,12 @@ const VALID_VOICE_NAMES = new Set(
   VOICE_NAMES_WITH_TONES.split(", ").map((s) => s.split(" -- ")[0].trim()),
 )
 
-function parseCharacterDetails(raw: unknown): CharacterDetails | null {
-  if (!raw || typeof raw !== "object" || !("name" in raw)) return null
-  const o = raw as Record<string, unknown>
-  const name = typeof o.name === "string" ? o.name.trim() : ""
-  if (!name) return null
-  return {
-    name,
-    age: typeof o.age === "string" ? o.age.trim() : undefined,
-    hair: typeof o.hair === "string" ? o.hair.trim() : undefined,
-    eyes: typeof o.eyes === "string" ? o.eyes.trim() : undefined,
-    clothing: typeof o.clothing === "string" ? o.clothing.trim() : undefined,
-    style: typeof o.style === "string" ? o.style.trim() : undefined,
-  }
-}
-
 function parsePrepareStoryResponse(text: string): {
   shortPlot: string
   lucideIconNames: string[]
   voiceName: string
-  characters: CharacterDetails[]
+  characters: string[]
+  illustrationStyle: string
 } | null {
   console.log("prepare story response text", text)
   const trimmed = text
@@ -62,7 +47,8 @@ function parsePrepareStoryResponse(text: string): {
       "shortPlot" in parsed &&
       "lucideIconNames" in parsed &&
       "voiceName" in parsed &&
-      "characters" in parsed
+      "characters" in parsed &&
+      "illustrationStyle" in parsed
     ) {
       console.log("voice is", parsed.voiceName)
       const shortPlot =
@@ -79,11 +65,21 @@ function parsePrepareStoryResponse(text: string): {
       }
       const rawChars = (parsed as { characters: unknown }).characters
       const characters = Array.isArray(rawChars)
-        ? rawChars
-            .map(parseCharacterDetails)
-            .filter((c): c is CharacterDetails => c !== null)
+        ? rawChars.filter((x): x is string => typeof x === "string")
         : []
-      return { shortPlot, lucideIconNames, voiceName, characters }
+      const rawStyle = (parsed as { illustrationStyle: unknown })
+        .illustrationStyle
+      const illustrationStyle =
+        typeof rawStyle === "string" && rawStyle.trim()
+          ? rawStyle.trim()
+          : DEFAULT_GLOBAL_ILLUSTRATION_STYLE
+      return {
+        shortPlot,
+        lucideIconNames,
+        voiceName,
+        characters,
+        illustrationStyle,
+      }
     }
   } catch {
     // ignore
@@ -144,13 +140,7 @@ ${transcript ? `\nConversation transcript (for context):\n${transcript}` : ""}`
       )
     }
 
-    const illustrationStyle =
-      result.characters.length > 0
-        ? buildIllustrationStylePrefix(
-            result.characters,
-            DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
-          )
-        : DEFAULT_GLOBAL_ILLUSTRATION_STYLE
+    const illustrationStyle = result.illustrationStyle
     const imagePromptFull = buildIllustrationPrompt(
       illustrationStyle,
       result.shortPlot,
