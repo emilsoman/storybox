@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import * as LucideIcons from "lucide-react"
 import { Phone, PhoneOff, Send } from "lucide-react"
-import type { LucideIcon } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import type {
   PageContent,
@@ -18,10 +16,6 @@ function CurrentPageSection({
   storyConfig: StoryConfig
   nextPageReady: boolean
 }) {
-  const iconMap = LucideIcons as unknown as Record<
-    string,
-    LucideIcon | undefined
-  >
   const coverImageDataUrl =
     currentPage.coverImageBase64 && currentPage.coverImageMimeType
       ? `data:${currentPage.coverImageMimeType};base64,${currentPage.coverImageBase64}`
@@ -51,26 +45,6 @@ function CurrentPageSection({
         <div>
           <p className="text-xs font-medium text-muted-foreground mb-1">Plot</p>
           <p className="text-sm">{currentPage.shortPlot}</p>
-        </div>
-      )}
-      {storyConfig.lucideIconNames.length > 0 && (
-        <div className="flex flex-wrap gap-2 items-center">
-          <p className="text-xs font-medium text-muted-foreground w-full mb-1">
-            Icons
-          </p>
-          {storyConfig.lucideIconNames.map((name) => {
-            const Icon = iconMap[name]
-            if (!Icon) return null
-            return (
-              <span
-                key={name}
-                className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2"
-                title={name}
-              >
-                <Icon className="size-5" />
-              </span>
-            )
-          })}
         </div>
       )}
       <p className="text-sm">

@@ -267,11 +267,6 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
             )
             prepareResult = {
               shortPlot: data.shortPlot ?? "",
-              lucideIconNames: Array.isArray(data.lucideIconNames)
-                ? data.lucideIconNames.filter(
-                    (x): x is string => typeof x === "string",
-                  )
-                : [],
               voiceName:
                 typeof data.voiceName === "string" ? data.voiceName : "Zephyr",
               characters: characters.length > 0 ? characters : undefined,
@@ -292,7 +287,6 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
           } catch {
             prepareResult = {
               shortPlot: "",
-              lucideIconNames: [],
               voiceName: "Zephyr",
             }
           }

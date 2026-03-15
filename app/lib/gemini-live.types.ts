@@ -4,7 +4,6 @@ export type ConnectionState = "disconnected" | "connecting" | "connected"
 
 export type StoryConfig = {
   shortPlot: string
-  lucideIconNames: string[]
   voiceName: string
   /** Base64-encoded cover image from prepare-story (e.g. PNG). */
   coverImageBase64?: string

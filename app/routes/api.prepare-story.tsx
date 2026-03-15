@@ -13,13 +13,12 @@ const VALID_VOICE_NAMES_LIST = VOICE_NAMES_WITH_TONES.split(", ")
   .map((s) => s.split(" -- ")[0].trim())
   .join(", ")
 
-const PREPARE_STORY_PROMPT = `You are preparing a kids' storybook session. Given the story setup below, output a JSON object with exactly these five keys (no other text, no markdown code fence):
+const PREPARE_STORY_PROMPT = `You are preparing a kids' storybook session. Given the story setup below, output a JSON object with exactly these four keys (no other text, no markdown code fence):
 
 1. "shortPlot": A short plot summary in 2-4 sentences that a narrator will use as the story outline.
-2. "lucideIconNames": An array of 3-5 Lucide icon names in PascalCase that fit the story (e.g. BookOpen, Sparkles, TreePine, Castle, Sun, Moon). Use only real Lucide icon names from the lucide-react library.
-3. "voiceName": The narrator voice. You must use exactly one of these names (the first word from each option): ${VALID_VOICE_NAMES_LIST}. To choose, use the tone hints: ${VOICE_NAMES_WITH_TONES}. Example: for an excitable story use "Fenrir", not "Excitable".
-4. "characters": An array of strings. Each string is a full character description (name and any physical/visual details) for consistent image generation across pages. Example: ["Luma, 9, short curly black hair, large green eyes, yellow raincoat and red boots, soft watercolor style", "A friendly dragon with emerald scales"]. Use an empty array [] if there are no specific characters.
-5. "illustrationStyle": A short string describing the illustration style for all pages (e.g. "soft watercolor children's book illustration"). This will be used for every page image.
+2. "voiceName": The narrator voice. You must use exactly one of these names (the first word from each option): ${VALID_VOICE_NAMES_LIST}. To choose, use the tone hints: ${VOICE_NAMES_WITH_TONES}. Example: for an excitable story use "Fenrir", not "Excitable".
+3. "characters": An array of strings. Each string is a full character description (name and any physical/visual details) for consistent image generation across pages. Example: ["Luma, 9, short curly black hair, large green eyes, yellow raincoat and red boots, soft watercolor style", "A friendly dragon with emerald scales"]. Use an empty array [] if there are no specific characters.
+4. "illustrationStyle": A short string describing the illustration style for all pages (e.g. "soft watercolor children's book illustration"). This will be used for every page image.
 
 Output only the JSON object, nothing else.`
 
@@ -29,7 +28,6 @@ const VALID_VOICE_NAMES = new Set(
 
 function parsePrepareStoryResponse(text: string): {
   shortPlot: string
-  lucideIconNames: string[]
   voiceName: string
   characters: string[]
   illustrationStyle: string
@@ -45,7 +43,6 @@ function parsePrepareStoryResponse(text: string): {
       parsed &&
       typeof parsed === "object" &&
       "shortPlot" in parsed &&
-      "lucideIconNames" in parsed &&
       "voiceName" in parsed &&
       "characters" in parsed &&
       "illustrationStyle" in parsed
@@ -55,10 +52,6 @@ function parsePrepareStoryResponse(text: string): {
         typeof (parsed as { shortPlot: unknown }).shortPlot === "string"
           ? (parsed as { shortPlot: string }).shortPlot
           : ""
-      const rawIcons = (parsed as { lucideIconNames: unknown }).lucideIconNames
-      const lucideIconNames = Array.isArray(rawIcons)
-        ? rawIcons.filter((x): x is string => typeof x === "string")
-        : []
       let voiceName = String((parsed as { voiceName: unknown }).voiceName ?? "")
       if (!VALID_VOICE_NAMES.has(voiceName)) {
         voiceName = "Zephyr"
@@ -75,7 +68,6 @@ function parsePrepareStoryResponse(text: string): {
           : DEFAULT_GLOBAL_ILLUSTRATION_STYLE
       return {
         shortPlot,
-        lucideIconNames,
         voiceName,
         characters,
         illustrationStyle,
@@ -131,7 +123,6 @@ ${transcript ? `\nConversation transcript (for context):\n${transcript}` : ""}`
       return Response.json(
         {
           shortPlot: "",
-          lucideIconNames: [],
           voiceName: "Zephyr",
           characters: [],
           illustrationStyle: DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
@@ -175,7 +166,6 @@ ${transcript ? `\nConversation transcript (for context):\n${transcript}` : ""}`
 
     return Response.json({
       shortPlot: result.shortPlot,
-      lucideIconNames: result.lucideIconNames,
       voiceName: result.voiceName,
       characters: result.characters,
       illustrationStyle,
