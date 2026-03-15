@@ -335,6 +335,7 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
     connectionState,
     error,
     transcript,
+    transcriptLines,
     storySetup,
     storyConfig,
     setupDone,

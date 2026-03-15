@@ -1,14 +1,13 @@
 import { useState } from "react"
-import ReactMarkdown from "react-markdown"
 import { Phone, PhoneOff, Send } from "lucide-react"
 import { Button } from "~/components/ui/button"
+import { cn } from "~/lib/utils"
 import type { UseStorySetupAgentReturn } from "~/lib/gemini-live.types"
 
 export function StorySetupView({
   connectionState,
   error,
-  transcript,
-  storySetup,
+  transcriptLines,
   connect,
   disconnect,
   sendTurn,
@@ -30,10 +29,13 @@ export function StorySetupView({
     setInputText("")
   }
 
+  const agentLines = transcriptLines.filter((e) => e.role === "agent")
+  const latestAgent = agentLines[agentLines.length - 1]
+
   return (
-    <div className="w-full max-w-lg space-y-8">
-      <header className="text-center space-y-2">
-        <h1 className="text-2xl font-semibold tracking-tight">
+    <div className="flex flex-col h-full">
+      <header className="space-y-1 mb-4">
+        <h1 className="text-xl font-semibold tracking-tight">
           Set up your story
         </h1>
         <p className="text-muted-foreground text-sm">
@@ -43,19 +45,19 @@ export function StorySetupView({
 
       {error && (
         <div
-          className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive mb-4"
           role="alert"
         >
           {error}
         </div>
       )}
 
-      <div className="flex flex-col items-center gap-4">
+      <div className="flex flex-col items-stretch gap-4 mb-4">
         <Button
           size="lg"
           onClick={handleConnect}
           disabled={connectionState === "connecting"}
-          className="min-w-[200px]"
+          className="w-full"
         >
           {connectionState === "connecting" ? (
             "Connecting…"
@@ -73,7 +75,7 @@ export function StorySetupView({
         </Button>
 
         {connectionState === "connected" && (
-          <div className="w-full flex gap-2">
+          <div className="flex gap-2">
             <input
               type="text"
               value={inputText}
@@ -96,25 +98,23 @@ export function StorySetupView({
         )}
       </div>
 
-      {storySetup != null && storySetup !== "" && (
-        <div className="rounded-lg border border-border bg-muted/30 p-4">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
-            Story setup
+      {latestAgent?.text?.trim() ? (
+        <div
+          className="mt-4 bg-muted/30 p-3 flex flex-col"
+          role="log"
+          aria-label="Transcript"
+        >
+          <p
+            key={`latest-${agentLines.length}`}
+            className={cn(
+              "text-sm whitespace-pre-wrap text-muted-foreground",
+              "animate-in fade-in duration-200",
+            )}
+          >
+            {latestAgent.text}
           </p>
-          <div className="text-sm [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:list-decimal [&_ol]:pl-4 [&_h2]:font-semibold [&_h2]:mt-2 [&_p]:mb-1">
-            <ReactMarkdown>{storySetup}</ReactMarkdown>
-          </div>
         </div>
-      )}
-
-      {transcript && (
-        <div className="rounded-lg border border-border bg-muted/30 p-4">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
-            Transcript
-          </p>
-          <p className="text-sm whitespace-pre-wrap">{transcript}</p>
-        </div>
-      )}
+      ) : null}
     </div>
   )
 }

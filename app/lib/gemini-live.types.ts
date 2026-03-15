@@ -24,6 +24,8 @@ export type UseStorySetupAgentReturn = {
   connectionState: ConnectionState
   error: string | null
   transcript: string
+  /** Full transcript as entries; filter to role === "agent" for agent-only. */
+  transcriptLines: TranscriptEntry[]
   storySetup: string | null
   storyConfig: StoryConfig | null
   /** True only after the setup agent has finished speaking following the start_story tool result. */
@@ -37,7 +39,11 @@ export type UseNarratorAgentReturn = {
   connectionState: ConnectionState
   error: string | null
   transcript: string
+  /** Full transcript as entries; filter to role === "agent" for narrator-only. */
+  transcriptLines: TranscriptEntry[]
   currentPage: PageContent
+  /** When next page is prepared, its content; null otherwise. */
+  nextPage: PageContent | null
   nextPageReady: boolean
   /** Live character list (updated as story progresses). */
   currentCharacters: string[]

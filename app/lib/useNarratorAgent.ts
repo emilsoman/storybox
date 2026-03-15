@@ -197,7 +197,7 @@ export function useNarratorAgent(
         model: MODEL,
         config: {
           responseModalities: [Modality.AUDIO],
-          enableAffectiveDialog: true,
+          enableAffectiveDialog: false,
           proactivity: { proactiveAudio: true },
           systemInstruction: buildNarratorSystemInstruction(
             storyConfig.shortPlot,
@@ -360,7 +360,9 @@ export function useNarratorAgent(
     connectionState,
     error,
     transcript,
+    transcriptLines,
     currentPage,
+    nextPage,
     nextPageReady,
     currentCharacters,
     currentIllustrationStyle,

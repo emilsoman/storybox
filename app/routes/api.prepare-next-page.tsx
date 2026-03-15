@@ -13,7 +13,7 @@ const NEXT_PAGE_PROMPT = `You are preparing the next page of a kids' storybook. 
 
 "shortPlot": A short plot summary in 2-4 sentences for the NEXT page/section of the story. It should follow naturally from the current page and the conversation. Keep it suitable for a narrator to read aloud.
 
-"characterUpdates": (optional) An array of strings. Each string is a full character description (name and any physical/visual details) for consistent image generation—same format as in prepare-story. Only include when the story implies a change: a new character appears (add one description string), or an existing character's appearance changes (include the updated description string). Omit or use [] if nothing changed.
+"characterUpdates": (optional) An array of strings. Each string is a full character description (name and any physical/visual details) for consistent image generation. Only include when the story implies a change: a new character appears (add one description string), or an existing character's appearance changes (include the updated description string). Omit or use [] if nothing changed.
 
 Output only the JSON object, nothing else.`
 

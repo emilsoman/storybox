@@ -1,112 +1,67 @@
 import { useEffect, useRef, useState } from "react"
-import { Phone, PhoneOff, Send } from "lucide-react"
+import { ChevronDown, Phone, PhoneOff, Send } from "lucide-react"
 import { Button } from "~/components/ui/button"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "~/components/ui/collapsible"
+import { cn } from "~/lib/utils"
 import type {
-  PageContent,
   StoryConfig,
   UseNarratorAgentReturn,
 } from "~/lib/gemini-live.types"
 
-function CurrentPageSection({
-  currentPage,
-  storyConfig,
-  nextPageReady,
+function CollapsibleSection({
+  label,
+  defaultOpen = false,
+  children,
 }: {
-  currentPage: PageContent
+  label: string
+  defaultOpen?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <Collapsible
+      defaultOpen={defaultOpen}
+      className="rounded-md border border-border bg-muted/20"
+    >
+      <CollapsibleTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="group w-full justify-between rounded-md px-3 py-2 text-left font-medium hover:bg-muted/50"
+        >
+          <span>{label}</span>
+          <ChevronDown className="size-4 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="px-3 pb-3 pt-0 text-sm">{children}</div>
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+
+export type NarratorViewProps = {
   storyConfig: StoryConfig
-  nextPageReady: boolean
-}) {
-  const coverImageDataUrl =
-    currentPage.coverImageBase64 && currentPage.coverImageMimeType
-      ? `data:${currentPage.coverImageMimeType};base64,${currentPage.coverImageBase64}`
-      : null
-  return (
-    <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-          Current page
-        </p>
-        {nextPageReady && (
-          <span className="text-xs font-medium text-primary shrink-0">
-            Next page ready
-          </span>
-        )}
-      </div>
-      {coverImageDataUrl && (
-        <div className="rounded-md overflow-hidden border border-border bg-muted/50">
-          <img
-            src={coverImageDataUrl}
-            alt="Story page"
-            className="w-full aspect-[4/3] object-cover"
-          />
-        </div>
-      )}
-      {currentPage.shortPlot && (
-        <div>
-          <p className="text-xs font-medium text-muted-foreground mb-1">Plot</p>
-          <p className="text-sm">{currentPage.shortPlot}</p>
-        </div>
-      )}
-      <p className="text-sm">
-        <span className="text-muted-foreground">Narrator voice: </span>
-        <strong>{storyConfig.voiceName}</strong>
-      </p>
-    </div>
-  )
-}
+  storySetup?: string | null
+} & UseNarratorAgentReturn
 
-function CharacterAndStyleSection({
-  characters,
-  illustrationStyle,
-}: {
-  characters: string[]
-  illustrationStyle: string
-}) {
-  if (characters.length === 0 && !illustrationStyle.trim()) return null
-  return (
-    <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
-      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-        Characters & illustration style
-      </p>
-      {characters.length > 0 && (
-        <div className="space-y-3">
-          {characters.map((desc, i) => (
-            <div
-              key={i}
-              className="rounded-md border border-border bg-background/80 p-3 text-sm text-muted-foreground"
-            >
-              {desc}
-            </div>
-          ))}
-        </div>
-      )}
-      {illustrationStyle.trim() && (
-        <div>
-          <p className="text-xs font-medium text-muted-foreground mb-1">
-            Illustration style (used for images)
-          </p>
-          <p className="text-sm text-muted-foreground break-words whitespace-pre-wrap rounded-md border border-border bg-muted/50 p-2 max-h-24 overflow-y-auto">
-            {illustrationStyle}
-          </p>
-        </div>
-      )}
-    </div>
-  )
-}
-
-export function NarratorView({
+export function NarratorLeftPanel({
   storyConfig,
   connectionState,
   error,
-  transcript,
   currentPage,
+  nextPage,
   nextPageReady,
   currentCharacters,
   currentIllustrationStyle,
   connect,
   disconnect,
   sendTurn,
-}: { storyConfig: StoryConfig } & UseNarratorAgentReturn) {
+  storySetup = null,
+}: NarratorViewProps) {
   const [inputText, setInputText] = useState("")
   const connectRef = useRef(connect)
   connectRef.current = connect
@@ -130,51 +85,42 @@ export function NarratorView({
     setInputText("")
   }
 
+  const characters =
+    currentCharacters.length > 0
+      ? currentCharacters
+      : (storyConfig.characters ?? [])
+  const illustrationStyle = currentIllustrationStyle.trim()
+    ? currentIllustrationStyle
+    : (storyConfig.illustrationStyle ?? "")
+
+  const isFirstPage = currentPage.shortPlot === storyConfig.shortPlot
+  const plotToShow = isFirstPage
+    ? storyConfig.shortPlot
+    : nextPageReady && nextPage?.shortPlot
+      ? nextPage.shortPlot
+      : currentPage.shortPlot
+
   return (
-    <div className="w-full max-w-lg space-y-8">
-      <header className="text-center space-y-2">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Story started!
-        </h1>
-        <p className="text-muted-foreground text-sm">
-          Talk to the narrator. The story is ready.
-        </p>
-      </header>
+    <>
+      <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+        Story controls
+      </h2>
 
       {error && (
         <div
-          className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive mb-4"
           role="alert"
         >
           {error}
         </div>
       )}
 
-      <CurrentPageSection
-        currentPage={currentPage}
-        storyConfig={storyConfig}
-        nextPageReady={nextPageReady}
-      />
-
-      <CharacterAndStyleSection
-        characters={
-          currentCharacters.length > 0
-            ? currentCharacters
-            : (storyConfig.characters ?? [])
-        }
-        illustrationStyle={
-          currentIllustrationStyle.trim()
-            ? currentIllustrationStyle
-            : (storyConfig.illustrationStyle ?? "")
-        }
-      />
-
-      <div className="flex flex-col items-center gap-4">
+      <div className="flex flex-col items-stretch gap-4 mb-4">
         <Button
           size="lg"
           onClick={handleConnect}
           disabled={connectionState === "connecting"}
-          className="min-w-[200px]"
+          className="w-full"
         >
           {connectionState === "connecting" ? (
             "Connecting…"
@@ -192,7 +138,7 @@ export function NarratorView({
         </Button>
 
         {connectionState === "connected" && (
-          <div className="w-full flex gap-2">
+          <div className="flex gap-2">
             <input
               type="text"
               value={inputText}
@@ -215,14 +161,79 @@ export function NarratorView({
         )}
       </div>
 
-      {transcript && (
-        <div className="rounded-lg border border-border bg-muted/30 p-4">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
-            Transcript
-          </p>
-          <p className="text-sm whitespace-pre-wrap">{transcript}</p>
-        </div>
-      )}
+      <div className="flex flex-col gap-2">
+        <CollapsibleSection label="Characters" defaultOpen={false}>
+          {characters.length === 0 ? (
+            <p className="text-muted-foreground">No characters defined.</p>
+          ) : (
+            <ul className="space-y-2">
+              {characters.map((desc, i) => (
+                <li
+                  key={i}
+                  className="rounded-md border border-border bg-background/80 p-2 text-muted-foreground text-xs"
+                >
+                  {desc}
+                </li>
+              ))}
+            </ul>
+          )}
+        </CollapsibleSection>
+
+        <CollapsibleSection label="Illustration style" defaultOpen={false}>
+          {illustrationStyle ? (
+            <p className="text-muted-foreground break-words whitespace-pre-wrap rounded-md border border-border bg-muted/50 p-2 max-h-24 overflow-y-auto text-xs">
+              {illustrationStyle}
+            </p>
+          ) : (
+            <p className="text-muted-foreground">No style set.</p>
+          )}
+        </CollapsibleSection>
+
+        <CollapsibleSection label="Plot" defaultOpen={true}>
+          {plotToShow ? (
+            <p className="text-muted-foreground text-xs">{plotToShow}</p>
+          ) : (
+            <p className="text-muted-foreground">No plot summary.</p>
+          )}
+        </CollapsibleSection>
+      </div>
+    </>
+  )
+}
+
+export function NarratorRightPanel({ currentPage }: NarratorViewProps) {
+  const coverImageDataUrl =
+    currentPage.coverImageBase64 && currentPage.coverImageMimeType
+      ? `data:${currentPage.coverImageMimeType};base64,${currentPage.coverImageBase64}`
+      : null
+  const pageKey = `${currentPage.shortPlot.slice(0, 80)}-${currentPage.coverImageBase64?.slice(0, 20) ?? "no-img"}`
+
+  return (
+    <div className="relative w-full flex-1 min-h-0 min-w-0 rounded-lg overflow-hidden bg-muted/50">
+      {coverImageDataUrl ? (
+        <img
+          key={pageKey}
+          src={coverImageDataUrl}
+          alt="Story page"
+          className={cn(
+            "absolute inset-0 w-full h-full object-cover",
+            "animate-in fade-in duration-300",
+          )}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+export function NarratorView(props: NarratorViewProps) {
+  return (
+    <div className="w-full h-full flex flex-col md:flex-row min-h-0 gap-4 md:gap-6 p-4 md:p-6 overflow-hidden">
+      <aside className="flex flex-col w-full md:w-80 md:min-w-[280px] md:max-w-[360px] shrink-0 border border-border bg-muted/20 rounded-lg p-4 overflow-y-auto">
+        <NarratorLeftPanel {...props} />
+      </aside>
+      <section className="flex-1 min-w-0 flex flex-col gap-4 overflow-y-auto">
+        <NarratorRightPanel {...props} />
+      </section>
     </div>
   )
 }
