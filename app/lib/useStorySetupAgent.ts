@@ -148,6 +148,8 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
       startStoryHandledRef.current = true
       const session = sessionRef.current
       if (!session) return
+      // Null sessionRef early so mic audio stops reaching the setup session during transition
+      sessionRef.current = null
       const functionCalls = toolCall.functionCalls!
       ;(async () => {
         const transcriptForPrepare = transcriptLinesRef.current
@@ -205,18 +207,18 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
           } as Record<string, unknown>,
           scheduling: FunctionResponseScheduling.WHEN_IDLE,
         }))
-        sessionRef.current?.sendToolResponse({ functionResponses })
+        session.sendToolResponse({ functionResponses })
+        queueRef.current = [] // discard stale messages so we wait for the farewell turn's turnComplete
         await handleTurnSetupRef.current?.()
+        stopPlayback()
         setSetupDone(true)
         isTransitioningToNarratorRef.current = true
-        sessionRef.current?.close()
-        sessionRef.current = null
+        session.close()
         handleTurnSetupRef.current = null
         queueRef.current = []
         audioPartsRef.current = []
         storySetupAbortRef.current?.abort()
         storySetupAbortRef.current = null
-        stopPlayback()
         setConnectionState("disconnected")
         setError(null)
         setTranscriptLines([])

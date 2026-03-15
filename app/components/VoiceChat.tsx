@@ -61,6 +61,12 @@ export function VoiceChat() {
     }
   }, [isNarrator, narrator.connect])
 
+  useEffect(() => {
+    if (narrator.connectionState === "connected" && setup.isMicrophoneOn && !narrator.isMicrophoneOn) {
+      narrator.startMicrophone()
+    }
+  }, [narrator.connectionState, setup.isMicrophoneOn, narrator.isMicrophoneOn, narrator.startMicrophone])
+
   return (
     <main className="min-h-screen h-screen bg-background flex flex-col overflow-hidden p-0">
       <div className="w-full h-full flex flex-col md:flex-row min-h-0 gap-4 md:gap-6 p-4 md:p-6 overflow-hidden">
