@@ -248,7 +248,7 @@ export function NarratorLeftPanel({
           )}
         </CollapsibleSection>
 
-        <CollapsibleSection label="Plot" defaultOpen={true}>
+        <CollapsibleSection label="Plot" defaultOpen={false}>
           {plotToShow ? (
             <p className="text-muted-foreground text-xs">{plotToShow}</p>
           ) : (

@@ -267,12 +267,10 @@ export function useNarratorAgent(
           },
           onmessage: (message: LiveServerMessage) => {
             queueRef.current.push(message)
-            if (message.serverContent?.modelTurn?.parts?.length) {
-              if (!modelTurnActiveRef.current) {
-                modelTurnActiveRef.current = true
-                setTranscriptLines([])
-                liveTranscriptRef.current = []
-              }
+            if (message.serverContent?.outputTranscription?.text && !modelTurnActiveRef.current) {
+              modelTurnActiveRef.current = true
+              setTranscriptLines([])
+              liveTranscriptRef.current = []
             }
             handleModelTurn(message)
 
