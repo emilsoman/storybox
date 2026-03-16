@@ -1,11 +1,12 @@
 import type { Route } from "./+types/api.prepare-story"
 import {
   buildIllustrationPrompt,
+  buildIllustrationStylePrefix,
   DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
 } from "~/lib/gemini-live.types"
 
 const PREPARE_STORY_MODEL = "gemini-2.0-flash"
-const IMAGE_MODEL = "gemini-2.5-flash-image"
+const IMAGE_MODEL = "gemini-3.1-flash-image-preview"
 
 const VOICE_NAMES_WITH_TONES = `Puck -- Upbeat, Charon -- Informative, Kore -- Firm, Fenrir -- Excitable, Leda -- Youthful, Orus -- Firm, Aoede -- Breezy, Callirrhoe -- Easy-going, Autonoe -- Bright, Enceladus -- Breathy, Iapetus -- Clear, Umbriel -- Easy-going, Algieba -- Smooth, Despina -- Smooth, Erinome -- Clear, Algenib -- Gravelly, Rasalgethi -- Informative, Laomedeia -- Upbeat, Achernar -- Soft, Alnilam -- Firm, Schedar -- Even, Gacrux -- Mature, Pulcherrima -- Forward, Achird -- Friendly, Zubenelgenubi -- Casual, Vindemiatrix -- Gentle, Sadachbia -- Lively, Sadaltager -- Knowledgeable, Sulafat -- Warm`
 
@@ -132,10 +133,11 @@ ${transcript ? `\nConversation transcript (for context):\n${transcript}` : ""}`
     }
 
     const illustrationStyle = result.illustrationStyle
-    const imagePromptFull = buildIllustrationPrompt(
+    const stylePrefix = buildIllustrationStylePrefix(
+      result.characters,
       illustrationStyle,
-      result.shortPlot,
     )
+    const imagePromptFull = buildIllustrationPrompt(stylePrefix, result.shortPlot)
     const imagePrompt = `Create a single children's storybook cover illustration. No text or words in the image. ${imagePromptFull}`
 
     let coverImageBase64: string | undefined

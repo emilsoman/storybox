@@ -209,7 +209,7 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
             result: "ok",
             plot: prepareResult.shortPlot,
           } as Record<string, unknown>,
-          scheduling: FunctionResponseScheduling.WHEN_IDLE,
+          scheduling: FunctionResponseScheduling.SILENT,
         }))
         session.sendToolResponse({ functionResponses })
         // Navigation happens in onmessage when farewell turnComplete arrives
@@ -255,7 +255,9 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
               await microphoneCaptureRef.current.start(sendChunk)
               setIsMicrophoneOn(true)
             } catch (e) {
-              setError(e instanceof Error ? e.message : "Microphone access failed")
+              setError(
+                e instanceof Error ? e.message : "Microphone access failed",
+              )
             }
           },
           onmessage: (message: LiveServerMessage) => {

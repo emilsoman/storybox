@@ -1,49 +1,11 @@
 import {
-  buildIllustrationPrompt,
   buildIllustrationStylePrefix,
   DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
 } from "~/lib/gemini-live.types"
 
 type ActionArgs = { request: Request }
 
-const NEXT_PAGE_MODEL = "gemini-2.0-flash"
-const IMAGE_MODEL = "gemini-2.5-flash-image"
-
-const NEXT_PAGE_PROMPT = `You are preparing the next page of a kids' storybook. Given the story so far (transcript) and the current page plot, output a JSON object with these keys (no other text, no markdown code fence):
-
-"shortPlot": A short plot summary in 2-4 sentences for the NEXT page/section of the story. It should follow naturally from the current page and the conversation. Keep it suitable for a narrator to read aloud.
-
-"characterUpdates": (optional) An array of strings. Each string is a full character description (name and any physical/visual details) for consistent image generation. Only include when the story implies a change: a new character appears (add one description string), or an existing character's appearance changes (include the updated description string). Omit or use [] if nothing changed.
-
-Output only the JSON object, nothing else.`
-
-function parseNextPageResponse(text: string): {
-  shortPlot: string
-  characterUpdates: string[]
-} | null {
-  const trimmed = text
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/i, "")
-  try {
-    const parsed = JSON.parse(trimmed) as unknown
-    if (parsed && typeof parsed === "object" && "shortPlot" in parsed) {
-      const shortPlot =
-        typeof (parsed as { shortPlot: unknown }).shortPlot === "string"
-          ? (parsed as { shortPlot: string }).shortPlot
-          : ""
-      const rawUpdates = (parsed as { characterUpdates?: unknown })
-        .characterUpdates
-      const characterUpdates = Array.isArray(rawUpdates)
-        ? rawUpdates.filter((x): x is string => typeof x === "string")
-        : []
-      return { shortPlot, characterUpdates }
-    }
-  } catch {
-    // ignore
-  }
-  return null
-}
+const MODEL = "gemini-3.1-flash-image-preview"
 
 export async function action({ request }: ActionArgs) {
   console.log("prepare-next-page", request.method)
@@ -62,7 +24,6 @@ export async function action({ request }: ActionArgs) {
   let body: {
     transcript?: string
     currentShortPlot?: string
-    storySetup?: string
     characters?: unknown
     illustrationStyle?: string
     currentPageImageBase64?: string
@@ -77,19 +38,18 @@ export async function action({ request }: ActionArgs) {
   const transcript = typeof body.transcript === "string" ? body.transcript : ""
   const currentShortPlot =
     typeof body.currentShortPlot === "string" ? body.currentShortPlot : ""
-  const storySetup = typeof body.storySetup === "string" ? body.storySetup : ""
   const illustrationStyle =
     typeof body.illustrationStyle === "string" && body.illustrationStyle.trim()
       ? body.illustrationStyle.trim()
       : ""
   const currentPageImageBase64 =
     typeof body.currentPageImageBase64 === "string" &&
-    body.currentPageImageBase64.trim() !== ""
+    body.currentPageImageBase64.trim()
       ? body.currentPageImageBase64.trim()
       : undefined
   const currentPageImageMimeType =
     typeof body.currentPageImageMimeType === "string" &&
-    body.currentPageImageMimeType.trim() !== ""
+    body.currentPageImageMimeType.trim()
       ? body.currentPageImageMimeType.trim()
       : undefined
   const hasCurrentPageImage =
@@ -100,93 +60,98 @@ export async function action({ request }: ActionArgs) {
       )
     : []
 
+  const stylePrefix = buildIllustrationStylePrefix(
+    characters,
+    illustrationStyle || DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
+  )
+  const consistencyInstruction = hasCurrentPageImage
+    ? " Keep characters and art style consistent with the illustration in the previous image."
+    : ""
+
+  const prompt = `You are preparing the next page of a kids' storybook.
+
+Previous page plot: ${currentShortPlot || "(None)"}${transcript ? `\n\nConversation so far:\n${transcript}` : ""}
+
+Step 1 — Output a JSON object (no markdown, no code fence) with:
+- "shortPlot": 2-4 sentence summary for the NEXT page, progressing naturally from the previous
+- "characterUpdates": array of full character descriptions (name + visual details) for new or visually changed characters only, or []
+
+Step 2 — Generate a single children's storybook illustration for the next page based on your shortPlot. Style: ${stylePrefix}. No text or words in the image.${consistencyInstruction}`
+
+  console.log("prepare-next-page prompt:", prompt)
+
   const { GoogleGenAI } = await import("@google/genai")
   const client = new GoogleGenAI({ apiKey: apiKey.trim() })
 
-  const contents = `${NEXT_PAGE_PROMPT}
-
-Current page plot:
-${currentShortPlot || "(None)"}
-${transcript ? `\nConversation so far:\n${transcript}` : ""}
-${storySetup ? `\nOriginal story setup:\n${storySetup}` : ""}`
-
-  console.log("prepare-next-page contents", contents)
-
   try {
+    const userParts = hasCurrentPageImage
+      ? [
+          {
+            inlineData: {
+              data: currentPageImageBase64,
+              mimeType: currentPageImageMimeType ?? "image/png",
+            },
+          },
+          { text: prompt },
+        ]
+      : [{ text: prompt }]
+
     const response = await client.models.generateContent({
-      model: NEXT_PAGE_MODEL,
-      contents,
+      model: MODEL,
+      contents: [{ role: "user", parts: userParts }],
+      config: { responseModalities: ["TEXT", "IMAGE"] },
     })
 
-    const text = response.text ?? ""
-    const result = parseNextPageResponse(text)
-    if (!result) {
-      return Response.json({ nextShortPlot: "" }, { status: 200 })
+    type Part = {
+      text?: string
+      inlineData?: { data?: string; mimeType?: string }
     }
+    const parts =
+      (response as { candidates?: [{ content?: { parts?: Part[] } }] })
+        .candidates?.[0]?.content?.parts ?? []
 
-    const stylePrefix =
-      illustrationStyle !== ""
-        ? buildIllustrationStylePrefix(characters, illustrationStyle)
-        : buildIllustrationStylePrefix(
-            characters,
-            DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
-          )
-    const imagePromptContent = buildIllustrationPrompt(
-      stylePrefix,
-      result.shortPlot,
-    )
-    const consistencyInstruction = hasCurrentPageImage
-      ? " Keep characters and art style consistent with the illustration in the previous image."
-      : ""
-    const imagePrompt = `Create a single children's storybook illustration for this page. No text or words in the image.${consistencyInstruction} ${imagePromptContent}`
-
+    let shortPlot = ""
+    let characterUpdates: string[] = []
     let nextCoverImageBase64: string | undefined
     let nextCoverImageMimeType: string | undefined
-    try {
-      const imageContents = hasCurrentPageImage
-        ? [
-            {
-              role: "user" as const,
-              parts: [
-                {
-                  inlineData: {
-                    data: currentPageImageBase64,
-                    mimeType: currentPageImageMimeType ?? "image/png",
-                  },
-                },
-                { text: imagePrompt },
-              ],
-            },
-          ]
-        : imagePrompt
-      const imageResponse = await client.models.generateContent({
-        model: IMAGE_MODEL,
-        contents: imageContents,
-      })
-      type ImagePart = { inlineData?: { data?: string; mimeType?: string } }
-      type ImageContent = { content?: { parts?: ImagePart[] } }
-      type ImageResponse = { candidates?: ImageContent[] }
-      const candidate = (imageResponse as ImageResponse).candidates?.[0]
-      const parts = candidate?.content?.parts
-      if (parts?.length) {
-        for (const part of parts) {
-          const inlineData = (part as ImagePart).inlineData
-          if (inlineData?.data) {
-            nextCoverImageBase64 = inlineData.data
-            nextCoverImageMimeType = inlineData.mimeType ?? "image/png"
-            break
+
+    for (const part of parts) {
+      if (part.text && !shortPlot) {
+        const jsonMatch = part.text.match(/\{[\s\S]*\}/)
+        if (jsonMatch) {
+          try {
+            const parsed = JSON.parse(jsonMatch[0]) as unknown
+            if (parsed && typeof parsed === "object" && "shortPlot" in parsed) {
+              shortPlot =
+                typeof (parsed as { shortPlot: unknown }).shortPlot === "string"
+                  ? (parsed as { shortPlot: string }).shortPlot
+                  : ""
+              const rawUpdates = (parsed as { characterUpdates?: unknown })
+                .characterUpdates
+              characterUpdates = Array.isArray(rawUpdates)
+                ? rawUpdates.filter((x): x is string => typeof x === "string")
+                : []
+            }
+          } catch {
+            // not JSON, skip
           }
         }
+      } else if (part.inlineData?.data && !nextCoverImageBase64) {
+        nextCoverImageBase64 = part.inlineData.data
+        nextCoverImageMimeType = part.inlineData.mimeType ?? "image/png"
       }
-    } catch {
-      // continue without image
+    }
+
+    if (nextCoverImageBase64) {
+      console.log(
+        "Next page cover image generated. Mime type:",
+        nextCoverImageMimeType ?? "image/png",
+      )
     }
 
     return Response.json({
-      nextShortPlot: result.shortPlot,
-      ...(result.characterUpdates.length > 0 && {
-        characterUpdates: result.characterUpdates,
-      }),
+      nextShortPlot: shortPlot,
+      ...(characterUpdates.length > 0 && { characterUpdates }),
       ...(nextCoverImageBase64 && {
         nextCoverImageBase64,
         nextCoverImageMimeType: nextCoverImageMimeType ?? "image/png",

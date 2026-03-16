@@ -280,16 +280,19 @@ export function useNarratorAgent(
               if (mountedRef.current) setIsMicrophoneOn(true)
             } catch (e) {
               if (mountedRef.current) {
-                setError(e instanceof Error ? e.message : "Microphone access failed")
+                setError(
+                  e instanceof Error ? e.message : "Microphone access failed",
+                )
               }
             }
           },
           onmessage: (message: LiveServerMessage) => {
             queueRef.current.push(message)
-            if (message.serverContent?.outputTranscription?.text && !modelTurnActiveRef.current) {
+            if (
+              message.serverContent?.outputTranscription?.text &&
+              !modelTurnActiveRef.current
+            ) {
               modelTurnActiveRef.current = true
-              setTranscriptLines([])
-              liveTranscriptRef.current = []
             }
             handleModelTurn(message)
 
@@ -313,7 +316,10 @@ export function useNarratorAgent(
                   const callId = fc.id
                   const pageToUse = currentPageRef.current
                   const transcriptForApi = liveTranscriptRef.current
-                    .map((e) => `${e.role === "user" ? "You" : "Agent"}: ${e.text}`)
+                    .map(
+                      (e) =>
+                        `${e.role === "user" ? "You" : "Agent"}: ${e.text}`,
+                    )
                     .join("\n\n")
 
                   fetch("/api/prepare-next-page", {
@@ -328,14 +334,13 @@ export function useNarratorAgent(
                       ...(pageToUse.coverImageBase64 &&
                         pageToUse.coverImageMimeType && {
                           currentPageImageBase64: pageToUse.coverImageBase64,
-                          currentPageImageMimeType: pageToUse.coverImageMimeType,
+                          currentPageImageMimeType:
+                            pageToUse.coverImageMimeType,
                         }),
                     }),
                   })
                     .then((res) =>
-                      res.ok
-                        ? res.json()
-                        : Promise.reject(new Error("failed")),
+                      res.ok ? res.json() : Promise.reject(new Error("failed")),
                     )
                     .then((data) => {
                       if (!mountedRef.current) return
@@ -359,7 +364,7 @@ export function useNarratorAgent(
                       }
                       const updates = Array.isArray(data.characterUpdates)
                         ? data.characterUpdates.filter(
-                            (x): x is string => typeof x === "string",
+                            (x: unknown): x is string => typeof x === "string",
                           )
                         : []
                       if (updates.length > 0) {
@@ -381,9 +386,9 @@ export function useNarratorAgent(
                             id: callId,
                             name: "prepare_next_page",
                             response: shortPlot
-                              ? { status: "ready", plot: shortPlot }
+                              ? { status: "next_page_ready", plot: shortPlot }
                               : { status: "ended" },
-                            scheduling: FunctionResponseScheduling.WHEN_IDLE,
+                            scheduling: FunctionResponseScheduling.SILENT,
                           },
                         ],
                       })
@@ -402,6 +407,7 @@ export function useNarratorAgent(
                       })
                     })
                 } else if (fc.name === "show_next_page" && fc.id) {
+                  console.log("=============show next page====================")
                   const nextPageData = nextPageRef.current
                   if (nextPageData) {
                     setCurrentPage(nextPageData)
@@ -414,7 +420,7 @@ export function useNarratorAgent(
                         id: fc.id,
                         name: "show_next_page",
                         response: { status: "ok" },
-                        scheduling: FunctionResponseScheduling.WHEN_IDLE,
+                        scheduling: FunctionResponseScheduling.SILENT,
                       },
                     ],
                   })
