@@ -92,8 +92,6 @@ export function useNarratorAgent(
   > | null>(null)
   const currentPageRef = useRef(currentPage)
   currentPageRef.current = currentPage
-  const nextPageRef = useRef(nextPage)
-  nextPageRef.current = nextPage
   // Separate ref updated synchronously (not render-gated) for use in show_next_page handler
   const nextPageDataRef = useRef<PageContent | null>(null)
   const liveTranscriptRef = useRef<TranscriptEntry[]>([])
@@ -110,10 +108,6 @@ export function useNarratorAgent(
   const mountedRef = useRef(true)
   const prepareNextPageAbortRef = useRef<AbortController | null>(null)
   const prepareNextPageInFlightRef = useRef(false)
-  const prepareNextPagePendingIdsRef = useRef<string[]>([])
-  const audioSamplesQueuedRef = useRef(0)
-  const audioTurnStartMsRef = useRef(0)
-  const audioTurnStartedRef = useRef(false)
   const modelTurnActiveRef = useRef(false)
 
   const fetcher = useFetcher<{ token?: string; error?: string }>()
@@ -130,10 +124,7 @@ export function useNarratorAgent(
     prepareNextPageAbortRef.current?.abort()
     prepareNextPageAbortRef.current = null
     prepareNextPageInFlightRef.current = false
-    prepareNextPagePendingIdsRef.current = []
     nextPageDataRef.current = null
-    audioSamplesQueuedRef.current = 0
-    audioTurnStartedRef.current = false
     modelTurnActiveRef.current = false
     queueRef.current = []
     audioPartsRef.current = []
@@ -235,13 +226,7 @@ export function useNarratorAgent(
       httpOptions: { apiVersion: "v1alpha" as const },
     })
 
-    const onAudioChunk = (sampleCount: number) => {
-      if (!audioTurnStartedRef.current) {
-        audioTurnStartedRef.current = true
-        audioTurnStartMsRef.current = Date.now()
-      }
-      audioSamplesQueuedRef.current += sampleCount
-    }
+    const onAudioChunk = () => {}
 
     const handleModelTurn = createHandleModelTurn({
       setTranscriptLines,
@@ -334,8 +319,6 @@ export function useNarratorAgent(
             handleModelTurn(message)
 
             if (message.serverContent?.interrupted) {
-              audioSamplesQueuedRef.current = 0
-              audioTurnStartedRef.current = false
               modelTurnActiveRef.current = false
             }
 
@@ -349,15 +332,12 @@ export function useNarratorAgent(
                 if (fc.name === "prepare_next_page" && fc.id) {
                   const callId = fc.id
 
-                  // If a request is already in flight, queue this call ID —
-                  // it will receive the same response when the current request finishes.
+                  // If a request is already in flight, cancel it and prefer the latest call.
                   if (prepareNextPageInFlightRef.current) {
-                    prepareNextPagePendingIdsRef.current.push(callId)
-                    return
+                    prepareNextPageAbortRef.current?.abort()
                   }
 
                   prepareNextPageInFlightRef.current = true
-                  prepareNextPagePendingIdsRef.current = [callId]
 
                   const controller = new AbortController()
                   prepareNextPageAbortRef.current = controller
@@ -368,39 +348,6 @@ export function useNarratorAgent(
                         `${e.role === "user" ? "You" : "Agent"}: ${e.text}`,
                     )
                     .join("\n\n")
-
-                  const respondToAllPending = (isReady: boolean) => {
-                    const ids = prepareNextPagePendingIdsRef.current
-                    prepareNextPagePendingIdsRef.current = []
-                    prepareNextPageInFlightRef.current = false
-                    prepareNextPageAbortRef.current = null
-                    if (ids.length === 0) return
-                    const baseResponse = isReady
-                      ? { result: "ok" }
-                      : { result: "ended" }
-                    // Batch all responses in one call. Only the first ID uses
-                    // WHEN_IDLE (triggers one model generation); duplicates rely
-                    // on default scheduling so they don't create extra speech.
-                    sessionRef.current?.sendToolResponse({
-                      functionResponses: ids.map((id, index) =>
-                        index === 0
-                          ? {
-                              id,
-                              name: "prepare_next_page",
-                              response: {
-                                ...baseResponse,
-                                scheduling:
-                                  FunctionResponseScheduling.WHEN_IDLE,
-                              },
-                            }
-                          : {
-                              id,
-                              name: "prepare_next_page",
-                              response: baseResponse,
-                            },
-                      ),
-                    })
-                  }
 
                   fetch("/api/prepare-next-page", {
                     method: "POST",
@@ -435,7 +382,10 @@ export function useNarratorAgent(
                             ),
                     )
                     .then((data) => {
-                      if (!mountedRef.current) return
+                      // If this request was aborted in favor of a newer one or unmounted, skip.
+                      if (controller.signal.aborted || !mountedRef.current) {
+                        return
+                      }
                       const shortPlot =
                         typeof data.nextShortPlot === "string"
                           ? data.nextShortPlot
@@ -486,24 +436,42 @@ export function useNarratorAgent(
                         setCurrentCharacters(merged)
                         setCurrentIllustrationStyle(newStyle)
                       }
-                      // Only signal "ok" to the model when we have a valid next
-                      // page plot. If the plot is empty (or the call failed),
-                      // treat it as ended so the model doesn't call show_next_page.
-                      respondToAllPending(!!shortPlot)
+
+                      // Always acknowledge the tool call with result: "ok".
+                      sessionRef.current?.sendToolResponse({
+                        functionResponses: [
+                          {
+                            id: callId,
+                            name: "prepare_next_page",
+                            response: {
+                              result: "ok",
+                              scheduling: FunctionResponseScheduling.WHEN_IDLE,
+                            },
+                          },
+                        ],
+                      })
                     })
                     .catch((err) => {
-                      // Don't send responses if aborted by disconnect (session is gone)
-                      if (controller.signal.aborted) return
-                      if (!mountedRef.current) return
+                      // Don't send responses if aborted by disconnect or superseded by a newer call.
+                      if (controller.signal.aborted || !mountedRef.current)
+                        return
                       console.error(
                         "prepare_next_page: failed to prepare next page",
                         err,
                       )
-                      respondToAllPending(false)
+                    })
+                    .finally(() => {
+                      // Clear in-flight markers if this is still the active controller.
+                      if (prepareNextPageAbortRef.current === controller) {
+                        prepareNextPageInFlightRef.current = false
+                        prepareNextPageAbortRef.current = null
+                      }
                     })
                 } else if (fc.name === "show_next_page" && fc.id) {
+                  console.log("=============show next page====================")
                   const nextPageData = nextPageDataRef.current
                   if (nextPageData) {
+                    console.log("Showing next page")
                     nextPageDataRef.current = null
                     // Update ref synchronously so the next prepare_next_page call
                     // sees the correct current page even before React re-renders.
@@ -528,6 +496,7 @@ export function useNarratorAgent(
                             name: "show_next_page",
                             response: {
                               result: "no_page_ready",
+                              scheduling: FunctionResponseScheduling.SILENT,
                             },
                           },
                     ],

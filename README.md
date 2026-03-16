@@ -39,8 +39,9 @@ Your application will be available at `http://localhost:5173`.
 
 1. Get a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey).
 2. Copy `.env.example` to `.env` and set `GEMINI_API_KEY`. The key stays on the server; the app uses ephemeral tokens for the Live API and never sends the key to the client.
-3. Run `npm run dev`, open the app, and click **Start story setup**.
-4. Allow microphone access when prompted. Talk to the agent to set up your story; use **Mute** to stop sending your mic without ending the call.
+3. Make sure `GEMINI_API_KEY` is set in your environment (for example via `.env`) when running or testing the app.
+4. Run `npm run dev`, open the app, and click **Start story setup**.
+5. Allow microphone access when prompted. Talk to the agent to set up your story; use **Mute** to stop sending your mic without ending the call.
 
 ## Building for Production
 
