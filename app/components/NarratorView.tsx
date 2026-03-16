@@ -19,7 +19,7 @@ import type {
   StoryConfig,
   UseNarratorAgentReturn,
 } from "~/lib/gemini-live.types"
-import { takePicture } from "~/lib/camera-capture"
+import { useCameraCapture } from "~/lib/useCameraCapture"
 
 function CollapsibleSection({
   label,
@@ -77,7 +77,13 @@ export function NarratorLeftPanel({
   storySetup = null,
 }: NarratorViewProps) {
   const [inputText, setInputText] = useState("")
-  const [isTakingPicture, setIsTakingPicture] = useState(false)
+  const { openCamera, cameraModal } = useCameraCapture((base64, mimeType) => {
+    try {
+      sendImage(base64, mimeType)
+    } catch (e) {
+      reportError(e instanceof Error ? e.message : "Camera access failed")
+    }
+  })
 
   const handleConnect = () => {
     if (connectionState === "connected") {
@@ -102,19 +108,6 @@ export function NarratorLeftPanel({
     }
   }
 
-  const handleTakePicture = async () => {
-    if (isTakingPicture) return
-    setIsTakingPicture(true)
-    try {
-      const { base64, mimeType } = await takePicture()
-      sendImage(base64, mimeType)
-    } catch (e) {
-      reportError(e instanceof Error ? e.message : "Camera access failed")
-    } finally {
-      setIsTakingPicture(false)
-    }
-  }
-
   const characters =
     currentCharacters.length > 0
       ? currentCharacters
@@ -132,6 +125,7 @@ export function NarratorLeftPanel({
 
   return (
     <>
+      {cameraModal}
       <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
         Story controls
       </h2>
@@ -190,8 +184,7 @@ export function NarratorLeftPanel({
                 type="button"
                 variant="secondary"
                 size="icon"
-                onClick={handleTakePicture}
-                disabled={isTakingPicture}
+                onClick={openCamera}
                 aria-label="Take picture"
                 title="Take picture"
               >

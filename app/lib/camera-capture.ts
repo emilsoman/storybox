@@ -1,7 +1,35 @@
 /**
- * Camera capture for Gemini Live API using ImageCapture.
- * Takes a single photo and returns base64 JPEG. No fallback.
+ * Camera capture for Gemini Live API.
+ * Supports desktop (getUserMedia + canvas) and mobile (file input).
  */
+
+export function isMobileDevice(): boolean {
+  return (
+    /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+    navigator.maxTouchPoints > 1
+  )
+}
+
+export function captureVideoFrame(video: HTMLVideoElement): TakePictureResult {
+  const canvas = document.createElement("canvas")
+  canvas.width = video.videoWidth
+  canvas.height = video.videoHeight
+  canvas.getContext("2d")!.drawImage(video, 0, 0)
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.9)
+  return { base64: dataUrl.split(",")[1], mimeType: "image/jpeg" }
+}
+
+export function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      const dataUrl = reader.result as string
+      resolve(dataUrl.split(",")[1] ?? "")
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
 
 export type TakePictureResult = {
   base64: string

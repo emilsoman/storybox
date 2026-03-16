@@ -3,7 +3,7 @@ import { Mic, MicOff, Phone, PhoneOff, Send, Camera } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { cn } from "~/lib/utils"
 import type { UseStorySetupAgentReturn } from "~/lib/gemini-live.types"
-import { takePicture } from "~/lib/camera-capture"
+import { useCameraCapture } from "~/lib/useCameraCapture"
 
 export function StorySetupView({
   connectionState,
@@ -19,7 +19,13 @@ export function StorySetupView({
   reportError,
 }: UseStorySetupAgentReturn) {
   const [inputText, setInputText] = useState("")
-  const [isTakingPicture, setIsTakingPicture] = useState(false)
+  const { openCamera, cameraModal } = useCameraCapture((base64, mimeType) => {
+    try {
+      sendImage(base64, mimeType)
+    } catch (e) {
+      reportError(e instanceof Error ? e.message : "Camera access failed")
+    }
+  })
 
   const handleConnect = () => {
     if (connectionState === "connected") {
@@ -44,24 +50,12 @@ export function StorySetupView({
     }
   }
 
-  const handleTakePicture = async () => {
-    if (isTakingPicture) return
-    setIsTakingPicture(true)
-    try {
-      const { base64, mimeType } = await takePicture()
-      sendImage(base64, mimeType)
-    } catch (e) {
-      reportError(e instanceof Error ? e.message : "Camera access failed")
-    } finally {
-      setIsTakingPicture(false)
-    }
-  }
-
   const agentLines = transcriptLines.filter((e) => e.role === "agent")
   const latestAgent = agentLines[agentLines.length - 1]
 
   return (
     <div className="flex flex-col h-full">
+      {cameraModal}
       <header className="space-y-1 mb-4">
         <h1 className="text-xl font-semibold tracking-tight">
           Set up your story
@@ -125,8 +119,7 @@ export function StorySetupView({
                 type="button"
                 variant="secondary"
                 size="icon"
-                onClick={handleTakePicture}
-                disabled={isTakingPicture}
+                onClick={openCamera}
                 aria-label="Take picture"
                 title="Take picture"
               >
