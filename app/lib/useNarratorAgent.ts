@@ -263,8 +263,26 @@ export function useNarratorAgent(
           ],
         },
         callbacks: {
-          onopen: () => {
-            if (mountedRef.current) setConnectionState("connected")
+          onopen: async () => {
+            if (!mountedRef.current) return
+            setConnectionState("connected")
+            // Auto-start mic on connect
+            try {
+              if (!microphoneCaptureRef.current) {
+                microphoneCaptureRef.current = createMicrophoneCapture()
+              }
+              const sendChunk = (base64: string) => {
+                sessionRef.current?.sendRealtimeInput({
+                  audio: { data: base64, mimeType: "audio/pcm;rate=16000" },
+                })
+              }
+              await microphoneCaptureRef.current.start(sendChunk)
+              if (mountedRef.current) setIsMicrophoneOn(true)
+            } catch (e) {
+              if (mountedRef.current) {
+                setError(e instanceof Error ? e.message : "Microphone access failed")
+              }
+            }
           },
           onmessage: (message: LiveServerMessage) => {
             queueRef.current.push(message)

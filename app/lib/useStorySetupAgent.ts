@@ -240,8 +240,23 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
           tools: [{ functionDeclarations: [START_STORY_TOOL] }],
         },
         callbacks: {
-          onopen: () => {
+          onopen: async () => {
             setConnectionState("connected")
+            // Auto-start mic on connect
+            try {
+              if (!microphoneCaptureRef.current) {
+                microphoneCaptureRef.current = createMicrophoneCapture()
+              }
+              const sendChunk = (base64: string) => {
+                sessionRef.current?.sendRealtimeInput({
+                  audio: { data: base64, mimeType: "audio/pcm;rate=16000" },
+                })
+              }
+              await microphoneCaptureRef.current.start(sendChunk)
+              setIsMicrophoneOn(true)
+            } catch (e) {
+              setError(e instanceof Error ? e.message : "Microphone access failed")
+            }
           },
           onmessage: (message: LiveServerMessage) => {
             queueRef.current.push(message)
