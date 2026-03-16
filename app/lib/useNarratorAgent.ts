@@ -239,6 +239,7 @@ export function useNarratorAgent(
           proactivity: { proactiveAudio: true },
           systemInstruction: buildNarratorSystemInstruction(
             storyConfig.shortPlot,
+            storyConfig.characters ?? [],
           ),
           thinkingConfig: { thinkingBudget: 0 },
           speechConfig: {

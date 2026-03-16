@@ -32,8 +32,15 @@ export const SHOW_NEXT_PAGE_TOOL = {
     "Call this when the user asks to see the next page. This displays the next page illustration on the screen. Only call this after receiving a prepare_next_page response confirming the next page is ready.",
 } as const
 
-export function buildNarratorSystemInstruction(shortPlot: string): string {
-  return `You are the narrator for a kids' storybook. Here is the story plot: ${shortPlot}. Narrate engagingly and match the tone; keep replies suitable for spoken aloud.
+export function buildNarratorSystemInstruction(
+  shortPlot: string,
+  characters: string[] = [],
+): string {
+  const characterSection =
+    characters.length > 0
+      ? `\n\nCharacters in this story:\n${characters.map((c) => `- ${c}`).join("\n")}`
+      : ""
+  return `You are the narrator for a kids' storybook. Here is the story plot: ${shortPlot}.${characterSection} Narrate engagingly and match the tone; keep replies suitable for spoken aloud.
 
 You control page transitions using two tools:
 - prepare_next_page: Call this once when you are actively narrating the current page to prepare the next page in the background If this tool is called already while on the current page, don't call it again. Keep narrating the current page while waiting. You will receive a tool response when the next page is ready, or when the story has ended. Don't wait till the end of the current page to call this because the next page takes a little time to prepare.
