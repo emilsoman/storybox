@@ -420,7 +420,19 @@ export function useNarratorAgent(
                     }),
                   })
                     .then((res) =>
-                      res.ok ? res.json() : Promise.reject(new Error("failed")),
+                      res.ok
+                        ? res.json()
+                        : res
+                            .json()
+                            .catch(() => ({}))
+                            .then((data) =>
+                              Promise.reject(
+                                new Error(
+                                  (data as { error?: string }).error ??
+                                    "failed",
+                                ),
+                              ),
+                            ),
                     )
                     .then((data) => {
                       if (!mountedRef.current) return
@@ -428,6 +440,15 @@ export function useNarratorAgent(
                         typeof data.nextShortPlot === "string"
                           ? data.nextShortPlot
                           : ""
+                      const hasImage =
+                        typeof data.nextCoverImageBase64 === "string" &&
+                        data.nextCoverImageBase64
+                      const imageMissingFlag =
+                        typeof data.imageMissing === "boolean"
+                          ? data.imageMissing
+                          : false
+
+                      // Only treat as ready when we have a non-empty shortPlot.
                       if (shortPlot) {
                         const nextPageContent: PageContent = {
                           shortPlot,
@@ -442,6 +463,9 @@ export function useNarratorAgent(
                         }
                         nextPageDataRef.current = nextPageContent
                         setNextPage(nextPageContent)
+                        // Mark next page as ready even if the server had to fall
+                        // back to JSON-only after retries. The imageMissing flag
+                        // is for UI/telemetry; retries already tried to recover.
                         setNextPageReady(true)
                       }
                       const updates = Array.isArray(data.characterUpdates)
@@ -462,12 +486,19 @@ export function useNarratorAgent(
                         setCurrentCharacters(merged)
                         setCurrentIllustrationStyle(newStyle)
                       }
+                      // Only signal "ok" to the model when we have a valid next
+                      // page plot. If the plot is empty (or the call failed),
+                      // treat it as ended so the model doesn't call show_next_page.
                       respondToAllPending(!!shortPlot)
                     })
-                    .catch(() => {
+                    .catch((err) => {
                       // Don't send responses if aborted by disconnect (session is gone)
                       if (controller.signal.aborted) return
                       if (!mountedRef.current) return
+                      console.error(
+                        "prepare_next_page: failed to prepare next page",
+                        err,
+                      )
                       respondToAllPending(false)
                     })
                 } else if (fc.name === "show_next_page" && fc.id) {

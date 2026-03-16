@@ -5,7 +5,8 @@ import {
 
 type ActionArgs = { request: Request }
 
-const MODEL = "gemini-2.5-flash-image"
+const TEXT_MODEL = "gemini-2.0-flash"
+const IMAGE_MODEL = "gemini-2.5-flash-image"
 
 export async function action({ request }: ActionArgs) {
   console.log("prepare-next-page", request.method)
@@ -69,22 +70,85 @@ export async function action({ request }: ActionArgs) {
     ? " Keep characters and art style consistent with the illustration in the previous image."
     : ""
 
-  const prompt = `You are preparing the next page of a kids' storybook.
-
-Previous page plot: ${currentShortPlot || "(None)"}${transcript ? `\n\nConversation so far:\n${transcript}` : ""}
-
-Step 1 — Output a JSON object (no markdown, no code fence) with:
-- "shortPlot": 1-2 sentence summary for the NEXT page. Advance the story by exactly ONE brief moment from where the previous page left off. Keep it very short — each page covers only a single small beat. Do not skip ahead or resolve the story prematurely — leave the climax and resolution for later pages. If the story has already reached a natural conclusion, output an empty string "" to signal the story has ended.
-- "characterUpdates": array of full character descriptions (name + visual details) for new or visually changed characters only, or []
-
-Step 2 — Generate a single children's storybook illustration for the next page based on your shortPlot. Style: ${stylePrefix}. No text or words in the image.${consistencyInstruction}
-
-You must always complete BOTH Step 1 (JSON) and Step 2 (image) in a single response. Never skip either step, even if the story has already ended or the shortPlot is empty.`
-
   const { GoogleGenAI } = await import("@google/genai")
   const client = new GoogleGenAI({ apiKey: apiKey.trim() })
 
-  try {
+  async function generateNextPageJson(): Promise<{
+    shortPlot: string
+    characterUpdates: string[]
+  }> {
+    const prompt = `You are preparing the next page of a kids' storybook.
+
+Previous page plot: ${currentShortPlot || "(None)"}${
+      transcript ? `\n\nConversation so far:\n${transcript}` : ""
+    }
+
+Only perform this step:
+
+Step 1 — Output a JSON object (no markdown, no code fence) with BOTH of these fields:
+- "shortPlot": A NON-EMPTY 1–2 sentence summary for the NEXT page while the story is ongoing. Advance the story by exactly ONE brief moment from where the previous page left off. Keep it very short — each page covers only a single small beat. Do not skip ahead or resolve the story prematurely — leave the climax and resolution for later pages. Only output an empty string "" when the app has clearly indicated the story is completely finished.
+- "characterUpdates": An array that MUST ALWAYS be present. Use full character descriptions (name + visual details) for new or visually changed characters only. When there are no new or changed characters, set this to an empty array [].
+
+Return ONLY this JSON object in your response.`
+
+    const response = await client.models.generateContent({
+      model: TEXT_MODEL,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: { responseModalities: ["TEXT"] },
+    })
+
+    type TextPart = { text?: string }
+    const parts =
+      (response as { candidates?: [{ content?: { parts?: TextPart[] } }] })
+        .candidates?.[0]?.content?.parts ?? []
+
+    let shortPlot = ""
+    let characterUpdates: string[] = []
+
+    for (const part of parts) {
+      if (!part.text) continue
+      console.log("prepare-next-page JSON part.text:", part.text)
+      const jsonMatch = part.text.match(/\{[\s\S]*\}/)
+      if (!jsonMatch) continue
+      try {
+        const parsed = JSON.parse(jsonMatch[0]) as {
+          shortPlot?: unknown
+          characterUpdates?: unknown
+        }
+        const rawShort = parsed.shortPlot ?? ""
+        if (typeof rawShort === "string" && rawShort.trim()) {
+          shortPlot = rawShort.trim()
+        }
+        const rawUpdates = parsed.characterUpdates
+        characterUpdates = Array.isArray(rawUpdates)
+          ? rawUpdates.filter((x): x is string => typeof x === "string")
+          : []
+        // Once we've successfully parsed, we can stop.
+        if (shortPlot) break
+      } catch {
+        // not JSON, skip
+      }
+    }
+
+    if (!shortPlot) {
+      throw new Error("Model did not return a valid shortPlot JSON object")
+    }
+
+    return { shortPlot, characterUpdates }
+  }
+
+  async function generateNextPageImage(
+    shortPlot: string,
+  ): Promise<{
+    nextCoverImageBase64?: string
+    nextCoverImageMimeType?: string
+  }> {
+    const prompt = `Generate a single children's storybook illustration for the NEXT page of a kids' storybook.
+
+Next page plot: ${shortPlot}
+
+Style: ${stylePrefix}. No text or words in the image.${consistencyInstruction}`
+
     const userParts = hasCurrentPageImage
       ? [
           {
@@ -98,51 +162,47 @@ You must always complete BOTH Step 1 (JSON) and Step 2 (image) in a single respo
       : [{ text: prompt }]
 
     const response = await client.models.generateContent({
-      model: MODEL,
+      model: IMAGE_MODEL,
       contents: [{ role: "user", parts: userParts }],
-      config: { responseModalities: ["TEXT", "IMAGE"] },
+      config: { responseModalities: ["IMAGE"] },
     })
 
-    type Part = {
-      text?: string
-      inlineData?: { data?: string; mimeType?: string }
-    }
+    type ImagePart = { inlineData?: { data?: string; mimeType?: string } }
     const parts =
-      (response as { candidates?: [{ content?: { parts?: Part[] } }] })
+      (response as { candidates?: [{ content?: { parts?: ImagePart[] } }] })
         .candidates?.[0]?.content?.parts ?? []
 
-    let shortPlot = ""
-    let characterUpdates: string[] = []
     let nextCoverImageBase64: string | undefined
     let nextCoverImageMimeType: string | undefined
 
     for (const part of parts) {
-      console.log(part)
-      if (part.text) {
-        console.log("prepare-next-page part.text:", part.text)
-        const jsonMatch = part.text.match(/\{[\s\S]*\}/)
-        if (jsonMatch) {
-          try {
-            const parsed = JSON.parse(jsonMatch[0]) as unknown
-            if (parsed && typeof parsed === "object" && "shortPlot" in parsed) {
-              shortPlot =
-                typeof (parsed as { shortPlot: unknown }).shortPlot === "string"
-                  ? (parsed as { shortPlot: string }).shortPlot
-                  : ""
-              const rawUpdates = (parsed as { characterUpdates?: unknown })
-                .characterUpdates
-              characterUpdates = Array.isArray(rawUpdates)
-                ? rawUpdates.filter((x): x is string => typeof x === "string")
-                : []
-            }
-          } catch {
-            // not JSON, skip
-          }
-        }
-      } else if (part.inlineData?.data) {
+      if (part.inlineData?.data) {
         nextCoverImageBase64 = part.inlineData.data
         nextCoverImageMimeType = part.inlineData.mimeType ?? "image/png"
+        break
       }
+    }
+
+    return { nextCoverImageBase64, nextCoverImageMimeType }
+  }
+
+  try {
+    // First, get the next page JSON (shortPlot + characterUpdates)
+    const { shortPlot, characterUpdates } = await generateNextPageJson()
+
+    // Then, independently try to get an image for that plot. If it fails, we
+    // still advance the story with text-only content.
+    let nextCoverImageBase64: string | undefined
+    let nextCoverImageMimeType: string | undefined
+    try {
+      const imageResult = await generateNextPageImage(shortPlot)
+      nextCoverImageBase64 = imageResult.nextCoverImageBase64
+      nextCoverImageMimeType = imageResult.nextCoverImageMimeType
+    } catch (imageErr) {
+      console.warn(
+        "prepare-next-page: image generation failed for valid shortPlot",
+        imageErr,
+      )
     }
 
     if (nextCoverImageBase64) {
@@ -150,15 +210,18 @@ You must always complete BOTH Step 1 (JSON) and Step 2 (image) in a single respo
         "Next page cover image generated. Mime type:",
         nextCoverImageMimeType ?? "image/png",
       )
+    } else {
+      console.warn("Next page shortPlot ready but image is missing.")
     }
 
     return Response.json({
       nextShortPlot: shortPlot,
-      ...(characterUpdates.length > 0 && { characterUpdates }),
+      characterUpdates,
       ...(nextCoverImageBase64 && {
         nextCoverImageBase64,
         nextCoverImageMimeType: nextCoverImageMimeType ?? "image/png",
       }),
+      ...(!nextCoverImageBase64 && { imageMissing: true }),
     })
   } catch (err) {
     const message =

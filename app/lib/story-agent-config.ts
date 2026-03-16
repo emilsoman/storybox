@@ -22,7 +22,7 @@ export const START_STORY_TOOL = {
 export const PREPARE_NEXT_PAGE_TOOL = {
   name: "prepare_next_page",
   description:
-    "Call this as soon as you begin narrating a new page to prepare the next page in the background. Only call it once per page. Keep narrating normally while you wait. You will receive { result: 'ok' } when the next page is ready, or { result: 'ended' } when the story is over.",
+    "Call this as soon as you begin narrating a new page to prepare the next page in the background. Only call it once per page. Keep narrating normally while you wait. You will receive { result: 'ok' } when the next page plot (and usually its image) is ready, or { result: 'ended' } when the story is over or the app cannot prepare another page.",
   behavior: Behavior.NON_BLOCKING,
 } as const
 
