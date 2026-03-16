@@ -46,6 +46,7 @@ function parseNextPageResponse(text: string): {
 }
 
 export async function action({ request }: ActionArgs) {
+  console.log("prepare-next-page", request.method)
   if (request.method !== "POST") {
     return new Response(null, { status: 405 })
   }
@@ -108,6 +109,8 @@ Current page plot:
 ${currentShortPlot || "(None)"}
 ${transcript ? `\nConversation so far:\n${transcript}` : ""}
 ${storySetup ? `\nOriginal story setup:\n${storySetup}` : ""}`
+
+  console.log("prepare-next-page contents", contents)
 
   try {
     const response = await client.models.generateContent({

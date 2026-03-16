@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useFetcher } from "react-router"
 import {
+  FunctionResponseScheduling,
   GoogleGenAI,
   type LiveServerMessage,
   Modality,
@@ -18,7 +19,12 @@ import {
   buildIllustrationStylePrefix,
   DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
 } from "~/lib/gemini-live.types"
-import { buildNarratorSystemInstruction, MODEL } from "~/lib/story-agent-config"
+import {
+  buildNarratorSystemInstruction,
+  MODEL,
+  PREPARE_NEXT_PAGE_TOOL,
+  SHOW_NEXT_PAGE_TOOL,
+} from "~/lib/story-agent-config"
 import {
   createHandleModelTurn,
   createHandleTurnNarrator,
@@ -71,8 +77,6 @@ export function useNarratorAgent(
   currentPageRef.current = currentPage
   const nextPageRef = useRef(nextPage)
   nextPageRef.current = nextPage
-  const isMicrophoneOnRef = useRef(isMicrophoneOn)
-  isMicrophoneOnRef.current = isMicrophoneOn
   const liveTranscriptRef = useRef<TranscriptEntry[]>([])
   const currentCharactersRef = useRef(currentCharacters)
   currentCharactersRef.current = currentCharacters
@@ -85,14 +89,11 @@ export function useNarratorAgent(
   const isHandlingTurnRef = useRef(false)
   const pendingConnectRef = useRef(false)
   const mountedRef = useRef(true)
-  const prepareNextPageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  )
   const prepareNextPageAbortRef = useRef<AbortController | null>(null)
   const audioSamplesQueuedRef = useRef(0)
   const audioTurnStartMsRef = useRef(0)
   const audioTurnStartedRef = useRef(false)
-  const pageTurnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const modelTurnActiveRef = useRef(false)
 
   const fetcher = useFetcher<{ token?: string; error?: string }>()
   const fetcherRef = useRef(fetcher)
@@ -105,18 +106,11 @@ export function useNarratorAgent(
     sessionRef.current?.close()
     sessionRef.current = null
     handleTurnNarratorRef.current = null
-    if (prepareNextPageTimerRef.current) {
-      clearTimeout(prepareNextPageTimerRef.current)
-      prepareNextPageTimerRef.current = null
-    }
     prepareNextPageAbortRef.current?.abort()
     prepareNextPageAbortRef.current = null
-    if (pageTurnTimerRef.current) {
-      clearTimeout(pageTurnTimerRef.current)
-      pageTurnTimerRef.current = null
-    }
     audioSamplesQueuedRef.current = 0
     audioTurnStartedRef.current = false
+    modelTurnActiveRef.current = false
     queueRef.current = []
     audioPartsRef.current = []
     liveTranscriptRef.current = []
@@ -258,6 +252,14 @@ export function useNarratorAgent(
             triggerTokens: "104857",
             slidingWindow: { targetTokens: "52428" },
           },
+          tools: [
+            {
+              functionDeclarations: [
+                PREPARE_NEXT_PAGE_TOOL,
+                SHOW_NEXT_PAGE_TOOL,
+              ],
+            },
+          ],
         },
         callbacks: {
           onopen: () => {
@@ -265,127 +267,142 @@ export function useNarratorAgent(
           },
           onmessage: (message: LiveServerMessage) => {
             queueRef.current.push(message)
-            handleModelTurn(message)
-            // When audio input drives a turn, sendTurn() is never called, so we
-            // must handle page advancement and next-page prefetch here instead.
-            if (message.serverContent?.interrupted) {
-              if (pageTurnTimerRef.current) {
-                clearTimeout(pageTurnTimerRef.current)
-                pageTurnTimerRef.current = null
+            if (message.serverContent?.modelTurn?.parts?.length) {
+              if (!modelTurnActiveRef.current) {
+                modelTurnActiveRef.current = true
+                setTranscriptLines([])
+                liveTranscriptRef.current = []
               }
+            }
+            handleModelTurn(message)
+
+            if (message.serverContent?.interrupted) {
               audioSamplesQueuedRef.current = 0
               audioTurnStartedRef.current = false
+              modelTurnActiveRef.current = false
             }
 
-            if (
-              message.serverContent?.turnComplete &&
-              isMicrophoneOnRef.current &&
-              !isHandlingTurnRef.current
-            ) {
-              const currentNextPage = nextPageRef.current
-              const pageToUse = currentNextPage ?? currentPageRef.current
+            if (message.serverContent?.turnComplete) {
+              modelTurnActiveRef.current = false
+            }
 
-              // Compute delay until audio finishes
-              const totalAudioMs = (audioSamplesQueuedRef.current / 24000) * 1000
-              const elapsedMs = audioTurnStartedRef.current ? Date.now() - audioTurnStartMsRef.current : 0
-              const pageAdvanceDelayMs = Math.max(0, totalAudioMs - elapsedMs) + 200
+            // Handle tool calls from the narrator
+            if (message.toolCall?.functionCalls?.length) {
+              for (const fc of message.toolCall.functionCalls) {
+                if (fc.name === "prepare_next_page" && fc.id) {
+                  prepareNextPageAbortRef.current?.abort()
+                  const controller = new AbortController()
+                  prepareNextPageAbortRef.current = controller
+                  const callId = fc.id
+                  const pageToUse = currentPageRef.current
+                  const transcriptForApi = liveTranscriptRef.current
+                    .map((e) => `${e.role === "user" ? "You" : "Agent"}: ${e.text}`)
+                    .join("\n\n")
 
-              // Reset audio tracking for next turn
-              audioSamplesQueuedRef.current = 0
-              audioTurnStartedRef.current = false
-
-              // Cancel any stale page turn timer
-              if (pageTurnTimerRef.current) clearTimeout(pageTurnTimerRef.current)
-
-              // Schedule page advance after audio finishes
-              if (currentNextPage) {
-                pageTurnTimerRef.current = setTimeout(() => {
-                  pageTurnTimerRef.current = null
-                  setCurrentPage(currentNextPage)
-                  setNextPage(null)
-                  setNextPageReady(false)
-                }, pageAdvanceDelayMs)
-              }
-
-              // Start prepare-next-page immediately — no debounce
-              if (prepareNextPageTimerRef.current) {
-                clearTimeout(prepareNextPageTimerRef.current)
-                prepareNextPageTimerRef.current = null
-              }
-              prepareNextPageAbortRef.current?.abort()
-              const controller = new AbortController()
-              prepareNextPageAbortRef.current = controller
-              const transcriptForApi = liveTranscriptRef.current
-                .map((e) => `${e.role === "user" ? "You" : "Agent"}: ${e.text}`)
-                .join("\n\n")
-              fetch("/api/prepare-next-page", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                signal: controller.signal,
-                body: JSON.stringify({
-                  transcript: transcriptForApi,
-                  currentShortPlot: pageToUse.shortPlot,
-                  characters: currentCharactersRef.current,
-                  illustrationStyle: currentIllustrationStyleRef.current,
-                  ...(pageToUse.coverImageBase64 &&
-                    pageToUse.coverImageMimeType && {
-                      currentPageImageBase64: pageToUse.coverImageBase64,
-                      currentPageImageMimeType: pageToUse.coverImageMimeType,
+                  fetch("/api/prepare-next-page", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    signal: controller.signal,
+                    body: JSON.stringify({
+                      transcript: transcriptForApi,
+                      currentShortPlot: pageToUse.shortPlot,
+                      characters: currentCharactersRef.current,
+                      illustrationStyle: currentIllustrationStyleRef.current,
+                      ...(pageToUse.coverImageBase64 &&
+                        pageToUse.coverImageMimeType && {
+                          currentPageImageBase64: pageToUse.coverImageBase64,
+                          currentPageImageMimeType: pageToUse.coverImageMimeType,
+                        }),
                     }),
-                }),
-              })
-                .then((res) =>
-                  res.ok
-                    ? res.json()
-                    : Promise.reject(new Error("Prepare next page failed")),
-                )
-                .then(
-                  (data: {
-                    nextShortPlot?: string
-                    nextCoverImageBase64?: string
-                    nextCoverImageMimeType?: string
-                    characterUpdates?: string[]
-                  }) => {
-                    if (!mountedRef.current) return
-                    const shortPlot =
-                      typeof data.nextShortPlot === "string"
-                        ? data.nextShortPlot
-                        : ""
-                    if (shortPlot) {
-                      setNextPage({
-                        shortPlot,
-                        coverImageBase64:
-                          typeof data.nextCoverImageBase64 === "string"
-                            ? data.nextCoverImageBase64
-                            : undefined,
-                        coverImageMimeType:
-                          typeof data.nextCoverImageMimeType === "string"
-                            ? data.nextCoverImageMimeType
-                            : undefined,
-                      })
-                      setNextPageReady(true)
-                    }
-                    const updates = Array.isArray(data.characterUpdates)
-                      ? data.characterUpdates.filter(
-                          (x): x is string => typeof x === "string",
+                  })
+                    .then((res) =>
+                      res.ok
+                        ? res.json()
+                        : Promise.reject(new Error("failed")),
+                    )
+                    .then((data) => {
+                      if (!mountedRef.current) return
+                      const shortPlot =
+                        typeof data.nextShortPlot === "string"
+                          ? data.nextShortPlot
+                          : ""
+                      if (shortPlot) {
+                        setNextPage({
+                          shortPlot,
+                          coverImageBase64:
+                            typeof data.nextCoverImageBase64 === "string"
+                              ? data.nextCoverImageBase64
+                              : undefined,
+                          coverImageMimeType:
+                            typeof data.nextCoverImageMimeType === "string"
+                              ? data.nextCoverImageMimeType
+                              : undefined,
+                        })
+                        setNextPageReady(true)
+                      }
+                      const updates = Array.isArray(data.characterUpdates)
+                        ? data.characterUpdates.filter(
+                            (x): x is string => typeof x === "string",
+                          )
+                        : []
+                      if (updates.length > 0) {
+                        const merged = mergeCharacterUpdates(
+                          currentCharactersRef.current,
+                          updates,
                         )
-                      : []
-                    if (updates.length > 0) {
-                      const merged = mergeCharacterUpdates(
-                        currentCharactersRef.current,
-                        updates,
-                      )
-                      const newStyle = buildIllustrationStylePrefix(
-                        merged,
-                        currentIllustrationStyleRef.current ||
-                          DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
-                      )
-                      setCurrentCharacters(merged)
-                      setCurrentIllustrationStyle(newStyle)
-                    }
-                  },
-                )
-                .catch(() => {})
+                        const newStyle = buildIllustrationStylePrefix(
+                          merged,
+                          currentIllustrationStyleRef.current ||
+                            DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
+                        )
+                        setCurrentCharacters(merged)
+                        setCurrentIllustrationStyle(newStyle)
+                      }
+                      sessionRef.current?.sendToolResponse({
+                        functionResponses: [
+                          {
+                            id: callId,
+                            name: "prepare_next_page",
+                            response: shortPlot
+                              ? { status: "ready", plot: shortPlot }
+                              : { status: "ended" },
+                            scheduling: FunctionResponseScheduling.WHEN_IDLE,
+                          },
+                        ],
+                      })
+                    })
+                    .catch(() => {
+                      if (!mountedRef.current) return
+                      sessionRef.current?.sendToolResponse({
+                        functionResponses: [
+                          {
+                            id: callId,
+                            name: "prepare_next_page",
+                            response: { status: "ended" },
+                            scheduling: FunctionResponseScheduling.WHEN_IDLE,
+                          },
+                        ],
+                      })
+                    })
+                } else if (fc.name === "show_next_page" && fc.id) {
+                  const nextPageData = nextPageRef.current
+                  if (nextPageData) {
+                    setCurrentPage(nextPageData)
+                    setNextPage(null)
+                    setNextPageReady(false)
+                  }
+                  sessionRef.current?.sendToolResponse({
+                    functionResponses: [
+                      {
+                        id: fc.id,
+                        name: "show_next_page",
+                        response: { status: "ok" },
+                        scheduling: FunctionResponseScheduling.WHEN_IDLE,
+                      },
+                    ],
+                  })
+                }
+              }
             }
           },
           onerror: (e: ErrorEvent) => {
@@ -415,109 +432,23 @@ export function useNarratorAgent(
       })
   }, [fetcher.state, fetcher.data, disconnect, storyConfig])
 
-  const sendTurn = useCallback(
-    (text: string) => {
-      const session = sessionRef.current
-      if (!session) return
-      if (isHandlingTurnRef.current) return
+  const sendTurn = useCallback((text: string) => {
+    const session = sessionRef.current
+    if (!session) return
+    if (isHandlingTurnRef.current) return
 
-      const pageToUse = nextPage ?? currentPageRef.current
-      if (nextPage) {
-        setCurrentPage(nextPage)
-        setNextPage(null)
-        setNextPageReady(false)
-      }
+    setTranscriptLines((prev) => [...prev, { role: "user", text }])
+    session.sendRealtimeInput({ text })
 
-      const textToSend =
-        pageToUse.shortPlot.trim() !== ""
-          ? `Current page: ${pageToUse.shortPlot}\n\n${text}`
-          : text
-      setTranscriptLines((prev) => [...prev, { role: "user", text }])
-      session.sendRealtimeInput({ text: textToSend })
-
-      const transcriptForApi = [
-        ...transcriptLines,
-        { role: "user" as const, text },
-      ]
-        .map((e) => `${e.role === "user" ? "You" : "Agent"}: ${e.text}`)
-        .join("\n\n")
-      fetch("/api/prepare-next-page", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          transcript: transcriptForApi,
-          currentShortPlot: pageToUse.shortPlot,
-          characters: currentCharactersRef.current,
-          illustrationStyle: currentIllustrationStyleRef.current,
-          ...(pageToUse.coverImageBase64 &&
-            pageToUse.coverImageMimeType && {
-              currentPageImageBase64: pageToUse.coverImageBase64,
-              currentPageImageMimeType: pageToUse.coverImageMimeType,
-            }),
-        }),
+    const handleTurnNarrator = handleTurnNarratorRef.current
+    if (!handleTurnNarrator) return
+    isHandlingTurnRef.current = true
+    handleTurnNarrator()
+      .finally(() => {
+        isHandlingTurnRef.current = false
       })
-        .then((res) =>
-          res.ok
-            ? res.json()
-            : Promise.reject(new Error("Prepare next page failed")),
-        )
-        .then(
-          (data: {
-            nextShortPlot?: string
-            nextCoverImageBase64?: string
-            nextCoverImageMimeType?: string
-            characterUpdates?: string[]
-          }) => {
-            if (!mountedRef.current) return
-            const shortPlot =
-              typeof data.nextShortPlot === "string" ? data.nextShortPlot : ""
-            if (shortPlot) {
-              setNextPage({
-                shortPlot,
-                coverImageBase64:
-                  typeof data.nextCoverImageBase64 === "string"
-                    ? data.nextCoverImageBase64
-                    : undefined,
-                coverImageMimeType:
-                  typeof data.nextCoverImageMimeType === "string"
-                    ? data.nextCoverImageMimeType
-                    : undefined,
-              })
-              setNextPageReady(true)
-            }
-            const updates = Array.isArray(data.characterUpdates)
-              ? data.characterUpdates.filter(
-                  (x): x is string => typeof x === "string",
-                )
-              : []
-            if (updates.length > 0) {
-              const merged = mergeCharacterUpdates(
-                currentCharactersRef.current,
-                updates,
-              )
-              const newStyle = buildIllustrationStylePrefix(
-                merged,
-                currentIllustrationStyleRef.current ||
-                  DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
-              )
-              setCurrentCharacters(merged)
-              setCurrentIllustrationStyle(newStyle)
-            }
-          },
-        )
-        .catch(() => {})
-
-      const handleTurnNarrator = handleTurnNarratorRef.current
-      if (!handleTurnNarrator) return
-      isHandlingTurnRef.current = true
-      handleTurnNarrator()
-        .finally(() => {
-          isHandlingTurnRef.current = false
-        })
-        .catch(() => {})
-    },
-    [nextPage, transcriptLines],
-  )
+      .catch(() => {})
+  }, [])
 
   const startMicrophone = useCallback(async () => {
     const session = sessionRef.current
