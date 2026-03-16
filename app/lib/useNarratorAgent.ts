@@ -108,6 +108,7 @@ export function useNarratorAgent(
   const mountedRef = useRef(true)
   const prepareNextPageAbortRef = useRef<AbortController | null>(null)
   const prepareNextPageInFlightRef = useRef(false)
+  const prepareCompletedForCurrentPageRef = useRef(false)
   const modelTurnActiveRef = useRef(false)
 
   const fetcher = useFetcher<{ token?: string; error?: string }>()
@@ -124,6 +125,7 @@ export function useNarratorAgent(
     prepareNextPageAbortRef.current?.abort()
     prepareNextPageAbortRef.current = null
     prepareNextPageInFlightRef.current = false
+    prepareCompletedForCurrentPageRef.current = false
     nextPageDataRef.current = null
     modelTurnActiveRef.current = false
     queueRef.current = []
@@ -245,7 +247,6 @@ export function useNarratorAgent(
         config: {
           responseModalities: [Modality.AUDIO],
           enableAffectiveDialog: false,
-          proactivity: { proactiveAudio: true },
           systemInstruction: buildNarratorSystemInstruction(
             storyConfig.shortPlot,
             storyConfig.characters ?? [],
@@ -332,12 +333,30 @@ export function useNarratorAgent(
                 if (fc.name === "prepare_next_page" && fc.id) {
                   const callId = fc.id
 
-                  // If a request is already in flight, cancel it and prefer the latest call.
-                  if (prepareNextPageInFlightRef.current) {
-                    prepareNextPageAbortRef.current?.abort()
+                  // At most one real prepare per page: if already in flight or already completed for this page, short-circuit with a silent response.
+                  if (
+                    prepareNextPageInFlightRef.current ||
+                    prepareCompletedForCurrentPageRef.current
+                  ) {
+                    sessionRef.current?.sendToolResponse({
+                      functionResponses: [
+                        {
+                          id: callId,
+                          name: "prepare_next_page",
+                          response: {
+                            result: "already_preparing",
+                            scheduling: FunctionResponseScheduling.SILENT,
+                          },
+                        },
+                      ],
+                    })
+                    continue
                   }
 
                   prepareNextPageInFlightRef.current = true
+                  console.log(
+                    "[prepare_next_page] Starting real server request for current page.",
+                  )
 
                   const controller = new AbortController()
                   prepareNextPageAbortRef.current = controller
@@ -382,7 +401,7 @@ export function useNarratorAgent(
                             ),
                     )
                     .then((data) => {
-                      // If this request was aborted in favor of a newer one or unmounted, skip.
+                      // If this request was aborted (e.g. on disconnect) or unmounted, skip.
                       if (controller.signal.aborted || !mountedRef.current) {
                         return
                       }
@@ -400,6 +419,7 @@ export function useNarratorAgent(
 
                       // Only treat as ready when we have a non-empty shortPlot.
                       if (shortPlot) {
+                        prepareCompletedForCurrentPageRef.current = true
                         const nextPageContent: PageContent = {
                           shortPlot,
                           coverImageBase64:
@@ -452,7 +472,7 @@ export function useNarratorAgent(
                       })
                     })
                     .catch((err) => {
-                      // Don't send responses if aborted by disconnect or superseded by a newer call.
+                      // Don't send responses if aborted (e.g. on disconnect) or unmounted.
                       if (controller.signal.aborted || !mountedRef.current)
                         return
                       console.error(
@@ -479,6 +499,9 @@ export function useNarratorAgent(
                     setCurrentPage(nextPageData)
                     setNextPage(null)
                     setNextPageReady(false)
+                    // Reset prepare state so the next prepare_next_page call is for the new page.
+                    prepareCompletedForCurrentPageRef.current = false
+                    prepareNextPageInFlightRef.current = false
                   }
                   sessionRef.current?.sendToolResponse({
                     functionResponses: [

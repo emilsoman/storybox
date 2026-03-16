@@ -22,14 +22,14 @@ export const START_STORY_TOOL = {
 export const PREPARE_NEXT_PAGE_TOOL = {
   name: "prepare_next_page",
   description:
-    "Call this as soon as you begin narrating a new page to prepare the next page in the background. Only call it once per page. Keep narrating normally while you wait. You will receive { result: 'ok' } when the next page plot (and usually its image) is ready, or { result: 'ended' } when the story is over or the app cannot prepare another page.",
+    "Call this as soon as you begin narrating a new page to prepare the next page in the background. Only call it once per page — do not call it multiple times for the same page; call it once when you start narrating the page and wait for its result before calling again. Ignore any temptation to pre-schedule multiple pages; only prepare one next page at a time. Keep narrating normally while you wait. You will receive { result: 'ok' } when the next page plot (and usually its image) is ready, or { result: 'ended' } when the story is over or the app cannot prepare another page.",
   behavior: Behavior.NON_BLOCKING,
 } as const
 
 export const SHOW_NEXT_PAGE_TOOL = {
   name: "show_next_page",
   description:
-    "Call this to flip to the next page — it shows the new illustration on screen. Call it at a natural sentence boundary after you finish narrating the current page AND after receiving tool response with ok result from prepare_next_page.",
+    "Call this to flip to the next page — it shows the new illustration on screen. Call it at a natural sentence boundary after you finish narrating the current page AND after receiving tool response with ok result from prepare_next_page. Only call prepare_next_page for the newly shown page after show_next_page has completed (i.e. follow the page loop strictly: show_next_page then narrate then prepare_next_page for that page, then finish narrating, then show_next_page again).",
   behavior: Behavior.NON_BLOCKING,
 } as const
 
