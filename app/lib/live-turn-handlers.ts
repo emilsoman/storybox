@@ -10,12 +10,13 @@ export type HandleModelTurnDeps = {
   liveTranscriptRef: MutableRefObject<TranscriptEntry[]>
   audioPartsRef: MutableRefObject<string[]>
   mimeTypeRef: MutableRefObject<string>
+  onAudioChunk?: (sampleCount: number) => void
 }
 
 export function createHandleModelTurn(
   deps: HandleModelTurnDeps,
 ): (message: LiveServerMessage) => void {
-  const { setTranscriptLines, liveTranscriptRef, audioPartsRef, mimeTypeRef } =
+  const { setTranscriptLines, liveTranscriptRef, audioPartsRef, mimeTypeRef, onAudioChunk } =
     deps
 
   function updateTranscript(
@@ -70,6 +71,11 @@ export function createHandleModelTurn(
         const data = part.inlineData?.data ?? ""
         if (data) {
           playPcmBase64Chunk(data).catch(() => {})
+          if (onAudioChunk) {
+            const byteCount = Math.floor((data.length * 3) / 4)
+            const sampleCount = Math.floor(byteCount / 2) // Int16 = 2 bytes/sample
+            onAudioChunk(sampleCount)
+          }
         }
         if (part.inlineData?.mimeType) {
           mimeTypeRef.current = part.inlineData.mimeType

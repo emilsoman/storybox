@@ -137,6 +137,7 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
 
     const handleModelTurn = createHandleModelTurn({
       setTranscriptLines,
+      liveTranscriptRef: transcriptLinesRef,
       audioPartsRef,
       mimeTypeRef,
     })

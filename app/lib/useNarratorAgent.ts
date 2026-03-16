@@ -85,6 +85,14 @@ export function useNarratorAgent(
   const isHandlingTurnRef = useRef(false)
   const pendingConnectRef = useRef(false)
   const mountedRef = useRef(true)
+  const prepareNextPageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  )
+  const prepareNextPageAbortRef = useRef<AbortController | null>(null)
+  const audioSamplesQueuedRef = useRef(0)
+  const audioTurnStartMsRef = useRef(0)
+  const audioTurnStartedRef = useRef(false)
+  const pageTurnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const fetcher = useFetcher<{ token?: string; error?: string }>()
   const fetcherRef = useRef(fetcher)
@@ -97,6 +105,18 @@ export function useNarratorAgent(
     sessionRef.current?.close()
     sessionRef.current = null
     handleTurnNarratorRef.current = null
+    if (prepareNextPageTimerRef.current) {
+      clearTimeout(prepareNextPageTimerRef.current)
+      prepareNextPageTimerRef.current = null
+    }
+    prepareNextPageAbortRef.current?.abort()
+    prepareNextPageAbortRef.current = null
+    if (pageTurnTimerRef.current) {
+      clearTimeout(pageTurnTimerRef.current)
+      pageTurnTimerRef.current = null
+    }
+    audioSamplesQueuedRef.current = 0
+    audioTurnStartedRef.current = false
     queueRef.current = []
     audioPartsRef.current = []
     liveTranscriptRef.current = []
@@ -197,11 +217,20 @@ export function useNarratorAgent(
       httpOptions: { apiVersion: "v1alpha" as const },
     })
 
+    const onAudioChunk = (sampleCount: number) => {
+      if (!audioTurnStartedRef.current) {
+        audioTurnStartedRef.current = true
+        audioTurnStartMsRef.current = Date.now()
+      }
+      audioSamplesQueuedRef.current += sampleCount
+    }
+
     const handleModelTurn = createHandleModelTurn({
       setTranscriptLines,
       liveTranscriptRef,
       audioPartsRef,
       mimeTypeRef,
+      onAudioChunk,
     })
     const waitMessage = createWaitMessage(queueRef, handleModelTurn)
     const handleTurnNarrator = createHandleTurnNarrator(waitMessage)
@@ -239,6 +268,15 @@ export function useNarratorAgent(
             handleModelTurn(message)
             // When audio input drives a turn, sendTurn() is never called, so we
             // must handle page advancement and next-page prefetch here instead.
+            if (message.serverContent?.interrupted) {
+              if (pageTurnTimerRef.current) {
+                clearTimeout(pageTurnTimerRef.current)
+                pageTurnTimerRef.current = null
+              }
+              audioSamplesQueuedRef.current = 0
+              audioTurnStartedRef.current = false
+            }
+
             if (
               message.serverContent?.turnComplete &&
               isMicrophoneOnRef.current &&
@@ -246,17 +284,44 @@ export function useNarratorAgent(
             ) {
               const currentNextPage = nextPageRef.current
               const pageToUse = currentNextPage ?? currentPageRef.current
+
+              // Compute delay until audio finishes
+              const totalAudioMs = (audioSamplesQueuedRef.current / 24000) * 1000
+              const elapsedMs = audioTurnStartedRef.current ? Date.now() - audioTurnStartMsRef.current : 0
+              const pageAdvanceDelayMs = Math.max(0, totalAudioMs - elapsedMs) + 200
+
+              // Reset audio tracking for next turn
+              audioSamplesQueuedRef.current = 0
+              audioTurnStartedRef.current = false
+
+              // Cancel any stale page turn timer
+              if (pageTurnTimerRef.current) clearTimeout(pageTurnTimerRef.current)
+
+              // Schedule page advance after audio finishes
               if (currentNextPage) {
-                setCurrentPage(currentNextPage)
-                setNextPage(null)
-                setNextPageReady(false)
+                pageTurnTimerRef.current = setTimeout(() => {
+                  pageTurnTimerRef.current = null
+                  setCurrentPage(currentNextPage)
+                  setNextPage(null)
+                  setNextPageReady(false)
+                }, pageAdvanceDelayMs)
               }
+
+              // Start prepare-next-page immediately — no debounce
+              if (prepareNextPageTimerRef.current) {
+                clearTimeout(prepareNextPageTimerRef.current)
+                prepareNextPageTimerRef.current = null
+              }
+              prepareNextPageAbortRef.current?.abort()
+              const controller = new AbortController()
+              prepareNextPageAbortRef.current = controller
               const transcriptForApi = liveTranscriptRef.current
                 .map((e) => `${e.role === "user" ? "You" : "Agent"}: ${e.text}`)
                 .join("\n\n")
               fetch("/api/prepare-next-page", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
+                signal: controller.signal,
                 body: JSON.stringify({
                   transcript: transcriptForApi,
                   currentShortPlot: pageToUse.shortPlot,

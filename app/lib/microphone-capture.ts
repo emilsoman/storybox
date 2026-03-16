@@ -9,7 +9,7 @@
  */
 
 const TARGET_SAMPLE_RATE = 16000
-const CAPTURE_BUFFER_SIZE = 4096
+const CAPTURE_BUFFER_SIZE = 1024
 
 const CAPTURE_WORKLET_CODE = `
 class AudioCaptureProcessor extends AudioWorkletProcessor {
@@ -75,8 +75,9 @@ function convertFloat32ToInt16(buffer: Float32Array): ArrayBuffer {
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer)
   let binary = ""
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i])
+  const chunkSize = 8192
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
   }
   return typeof btoa !== "undefined" ? btoa(binary) : ""
 }
