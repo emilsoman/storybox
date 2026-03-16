@@ -2,14 +2,9 @@ import type { Route } from "./+types/api.story-setup"
 
 const STORY_SETUP_MODEL = "gemini-2.0-flash"
 
-const STORY_SETUP_PROMPT = `You are summarizing a conversation where someone is setting up a kids' story with an AI assistant. Based on the conversation transcript below, produce a short "Story setup" in markdown only. Use these sections when there is enough information; otherwise omit or use a placeholder like "Not yet decided":
+const STORY_SETUP_PROMPT = `You are summarizing a conversation where someone is setting up a kids' story with an AI assistant. Based on the conversation transcript below, write a single short paragraph describing what the story is about, based only on what the user has said. Do not add sections or bullet points.
 
-- **Characters** (who is in the story)
-- **Setting** (where it takes place)
-- **Tone** (e.g. funny, gentle, adventurous)
-- **Plot ideas** (any events or goals mentioned)
-
-Output only valid markdown. Update or fill in only what can be inferred from the transcript; keep the rest minimal. If the transcript is empty or too short, return a single line like "Share something about your story to see the setup here."`
+Output only valid markdown. If the transcript is empty or too short, return a single line like "Share something about your story to see the setup here."`
 
 export async function action({ request }: Route.ActionArgs) {
   if (request.method !== "POST") {
