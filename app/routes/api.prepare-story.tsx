@@ -6,7 +6,7 @@ import {
 } from "~/lib/gemini-live.types"
 
 const PREPARE_STORY_MODEL = "gemini-2.0-flash"
-const IMAGE_MODEL = "gemini-3.1-flash-image-preview"
+const IMAGE_MODEL = "gemini-2.5-flash-image"
 
 const VOICE_NAMES_WITH_TONES = `Puck -- Upbeat, Charon -- Informative, Kore -- Firm, Fenrir -- Excitable, Leda -- Youthful, Orus -- Firm, Aoede -- Breezy, Callirrhoe -- Easy-going, Autonoe -- Bright, Enceladus -- Breathy, Iapetus -- Clear, Umbriel -- Easy-going, Algieba -- Smooth, Despina -- Smooth, Erinome -- Clear, Algenib -- Gravelly, Rasalgethi -- Informative, Laomedeia -- Upbeat, Achernar -- Soft, Alnilam -- Firm, Schedar -- Even, Gacrux -- Mature, Pulcherrima -- Forward, Achird -- Friendly, Zubenelgenubi -- Casual, Vindemiatrix -- Gentle, Sadachbia -- Lively, Sadaltager -- Knowledgeable, Sulafat -- Warm`
 
@@ -16,7 +16,7 @@ const VALID_VOICE_NAMES_LIST = VOICE_NAMES_WITH_TONES.split(", ")
 
 const PREPARE_STORY_PROMPT = `You are preparing a kids' storybook session. Given the story setup below, output a JSON object with exactly these four keys (no other text, no markdown code fence):
 
-1. "shortPlot": A short plot summary in 2-4 sentences that a narrator will use as the story outline.
+1. "shortPlot": A short plot summary in 2-4 sentences that a narrator will use as the story outline. This should have all the details about the main characters in the story if there are any.
 2. "voiceName": The narrator voice. You must use exactly one of these names (the first word from each option): ${VALID_VOICE_NAMES_LIST}. To choose, use the tone hints: ${VOICE_NAMES_WITH_TONES}. Example: for an excitable story use "Fenrir", not "Excitable".
 3. "characters": An array of strings. Each string is a full character description (name and any physical/visual details) for consistent image generation across pages. Example: ["Luma, 9, short curly black hair, large green eyes, yellow raincoat and red boots, soft watercolor style", "A friendly dragon with emerald scales"]. Use an empty array [] if there are no specific characters.
 4. "illustrationStyle": A short string describing the illustration style for all pages (e.g. "soft watercolor children's book illustration"). This will be used for every page image.
@@ -137,7 +137,10 @@ ${transcript ? `\nConversation transcript (for context):\n${transcript}` : ""}`
       result.characters,
       illustrationStyle,
     )
-    const imagePromptFull = buildIllustrationPrompt(stylePrefix, result.shortPlot)
+    const imagePromptFull = buildIllustrationPrompt(
+      stylePrefix,
+      result.shortPlot,
+    )
     const imagePrompt = `Create a single children's storybook cover illustration. No text or words in the image. ${imagePromptFull}`
 
     let coverImageBase64: string | undefined

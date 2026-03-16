@@ -5,7 +5,7 @@ import {
 
 type ActionArgs = { request: Request }
 
-const MODEL = "gemini-3.1-flash-image-preview"
+const MODEL = "gemini-2.5-flash-image"
 
 export async function action({ request }: ActionArgs) {
   console.log("prepare-next-page", request.method)

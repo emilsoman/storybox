@@ -43,8 +43,25 @@ function pageFromStoryConfig(config: StoryConfig | null): PageContent {
   }
 }
 
+function extractCharacterName(entry: string): string {
+  // Entries are expected to start with "Name: ..." or "Name - ..."
+  return entry.split(/[:\-]/)[0].trim().toLowerCase()
+}
+
 function mergeCharacterUpdates(prev: string[], updates: string[]): string[] {
-  return [...prev, ...updates]
+  const result = [...prev]
+  for (const update of updates) {
+    const updateName = extractCharacterName(update)
+    const existingIndex = result.findIndex(
+      (e) => extractCharacterName(e) === updateName,
+    )
+    if (existingIndex !== -1) {
+      result[existingIndex] = update
+    } else {
+      result.push(update)
+    }
+  }
+  return result
 }
 
 export function useNarratorAgent(
@@ -293,6 +310,19 @@ export function useNarratorAgent(
               !modelTurnActiveRef.current
             ) {
               modelTurnActiveRef.current = true
+              // Proactive model turn started with no active turn loop — start one
+              // so the queue doesn't accumulate stale turnComplete messages.
+              if (!isHandlingTurnRef.current) {
+                const handleTurnNarrator = handleTurnNarratorRef.current
+                if (handleTurnNarrator) {
+                  isHandlingTurnRef.current = true
+                  handleTurnNarrator()
+                    .finally(() => {
+                      isHandlingTurnRef.current = false
+                    })
+                    .catch(() => {})
+                }
+              }
             }
             handleModelTurn(message)
 
@@ -419,7 +449,9 @@ export function useNarratorAgent(
                       {
                         id: fc.id,
                         name: "show_next_page",
-                        response: { status: "ok" },
+                        response: nextPageData
+                          ? { status: "ok" }
+                          : { status: "no_page_ready" },
                         scheduling: FunctionResponseScheduling.SILENT,
                       },
                     ],

@@ -41,7 +41,7 @@ export function buildNarratorSystemInstruction(
     characters.length > 0
       ? `\n\nCharacters in this story:\n${characters.map((c) => `- ${c}`).join("\n")}`
       : ""
-  return `You are the narrator for a kids' storybook. Here is the story plot: ${shortPlot}.${characterSection} Narrate engagingly and match the tone; keep replies suitable for spoken aloud. Keep each page's narration short and focused (aim for about 2–4 sentences per page).
+  return `You are the narrator for a kids' storybook. Here is the story plot: ${shortPlot}.${characterSection} Narrate engagingly and match the tone; keep replies suitable for spoken aloud. The story should be at least three pages long. Keep each page's narration short and focused (aim for about 2–4 sentences per page).
 
 You control page transitions using two tools:
 - prepare_next_page: Call this once when you are actively narrating the current page to prepare the next page in the background If this tool is called already while on the current page, don't call it again. Keep narrating the current page while waiting. You will receive a tool response when the next page is ready, or when the story has ended. Don't wait till the end of the current page to call this because the next page takes a little time to prepare.

@@ -60,6 +60,7 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
   const runStartStoryTransitionRef = useRef<
     ((toolCall: NonNullable<LiveServerMessage["toolCall"]>) => void) | null
   >(null)
+  const farewellTurnArrivedRef = useRef(false)
   transcriptLinesRef.current = transcriptLines
   storySetupRef.current = storySetup
 
@@ -84,6 +85,7 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
     setStoryConfig(null)
     setSetupDone(false)
     startStoryHandledRef.current = false
+    farewellTurnArrivedRef.current = false
   }, [])
 
   const connect = useCallback(async () => {
@@ -144,6 +146,26 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
     const waitMessage = createWaitMessage(queueRef, handleModelTurn)
     const handleTurnSetup = createHandleTurnSetup(waitMessage)
     handleTurnSetupRef.current = handleTurnSetup
+
+    const doFarewellTransition = () => {
+      if (!awaitingFarewellTurnCompleteRef.current) return
+      awaitingFarewellTurnCompleteRef.current = false
+      const farewellSession = transitionSessionRef.current
+      transitionSessionRef.current = null
+      handleTurnSetupRef.current = null
+      queueRef.current = []
+      audioPartsRef.current = []
+      storySetupAbortRef.current?.abort()
+      storySetupAbortRef.current = null
+      stopPlayback()
+      setSetupDone(true)
+      isTransitioningToNarratorRef.current = true
+      farewellSession?.close()
+      setConnectionState("disconnected")
+      setError(null)
+      setTranscriptLines([])
+      setStorySetup(null)
+    }
 
     runStartStoryTransitionRef.current = (toolCall) => {
       if (startStoryHandledRef.current) return
@@ -212,8 +234,10 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
           scheduling: FunctionResponseScheduling.SILENT,
         }))
         session.sendToolResponse({ functionResponses })
-        // Navigation happens in onmessage when farewell turnComplete arrives
+        // Navigation happens when farewell turnComplete arrives.
+        // If it already arrived before the fetch completed, transition immediately.
         awaitingFarewellTurnCompleteRef.current = true
+        if (farewellTurnArrivedRef.current) doFarewellTransition()
       })().catch(() => {})
     }
 
@@ -270,26 +294,11 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
             ) {
               runStartStoryTransitionRef.current?.(message.toolCall)
             }
-            if (
-              message.serverContent?.turnComplete &&
-              awaitingFarewellTurnCompleteRef.current
-            ) {
-              awaitingFarewellTurnCompleteRef.current = false
-              const farewellSession = transitionSessionRef.current
-              transitionSessionRef.current = null
-              handleTurnSetupRef.current = null
-              queueRef.current = []
-              audioPartsRef.current = []
-              storySetupAbortRef.current?.abort()
-              storySetupAbortRef.current = null
-              stopPlayback()
-              setSetupDone(true)
-              isTransitioningToNarratorRef.current = true
-              farewellSession?.close()
-              setConnectionState("disconnected")
-              setError(null)
-              setTranscriptLines([])
-              setStorySetup(null)
+            if (message.serverContent?.turnComplete && startStoryHandledRef.current) {
+              farewellTurnArrivedRef.current = true
+            }
+            if (message.serverContent?.turnComplete) {
+              doFarewellTransition()
             }
           },
           onerror: (e: ErrorEvent) => {
