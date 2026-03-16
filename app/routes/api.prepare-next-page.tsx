@@ -60,10 +60,11 @@ export async function action({ request }: ActionArgs) {
       )
     : []
 
-  const stylePrefix = buildIllustrationStylePrefix(
-    characters,
-    illustrationStyle || DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
-  )
+  // illustrationStyle already has characters baked in (built by the client);
+  // only fall back to building it fresh if the client sent the raw base style.
+  const stylePrefix =
+    illustrationStyle ||
+    buildIllustrationStylePrefix(characters, DEFAULT_GLOBAL_ILLUSTRATION_STYLE)
   const consistencyInstruction = hasCurrentPageImage
     ? " Keep characters and art style consistent with the illustration in the previous image."
     : ""
@@ -73,12 +74,12 @@ export async function action({ request }: ActionArgs) {
 Previous page plot: ${currentShortPlot || "(None)"}${transcript ? `\n\nConversation so far:\n${transcript}` : ""}
 
 Step 1 — Output a JSON object (no markdown, no code fence) with:
-- "shortPlot": 2-4 sentence summary for the NEXT page, progressing naturally from the previous
+- "shortPlot": 1-2 sentence summary for the NEXT page. Advance the story by exactly ONE brief moment from where the previous page left off. Keep it very short — each page covers only a single small beat. Do not skip ahead or resolve the story prematurely — leave the climax and resolution for later pages. If the story has already reached a natural conclusion, output an empty string "" to signal the story has ended.
 - "characterUpdates": array of full character descriptions (name + visual details) for new or visually changed characters only, or []
 
-Step 2 — Generate a single children's storybook illustration for the next page based on your shortPlot. Style: ${stylePrefix}. No text or words in the image.${consistencyInstruction}`
+Step 2 — Generate a single children's storybook illustration for the next page based on your shortPlot. Style: ${stylePrefix}. No text or words in the image.${consistencyInstruction}
 
-  console.log("prepare-next-page prompt:", prompt)
+You must always complete BOTH Step 1 (JSON) and Step 2 (image) in a single response. Never skip either step, even if the story has already ended or the shortPlot is empty.`
 
   const { GoogleGenAI } = await import("@google/genai")
   const client = new GoogleGenAI({ apiKey: apiKey.trim() })
@@ -116,7 +117,9 @@ Step 2 — Generate a single children's storybook illustration for the next page
     let nextCoverImageMimeType: string | undefined
 
     for (const part of parts) {
-      if (part.text && !shortPlot) {
+      console.log(part)
+      if (part.text) {
+        console.log("prepare-next-page part.text:", part.text)
         const jsonMatch = part.text.match(/\{[\s\S]*\}/)
         if (jsonMatch) {
           try {
@@ -136,7 +139,7 @@ Step 2 — Generate a single children's storybook illustration for the next page
             // not JSON, skip
           }
         }
-      } else if (part.inlineData?.data && !nextCoverImageBase64) {
+      } else if (part.inlineData?.data) {
         nextCoverImageBase64 = part.inlineData.data
         nextCoverImageMimeType = part.inlineData.mimeType ?? "image/png"
       }

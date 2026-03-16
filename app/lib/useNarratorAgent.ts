@@ -94,6 +94,8 @@ export function useNarratorAgent(
   currentPageRef.current = currentPage
   const nextPageRef = useRef(nextPage)
   nextPageRef.current = nextPage
+  // Separate ref updated synchronously (not render-gated) for use in show_next_page handler
+  const nextPageDataRef = useRef<PageContent | null>(null)
   const liveTranscriptRef = useRef<TranscriptEntry[]>([])
   const currentCharactersRef = useRef(currentCharacters)
   currentCharactersRef.current = currentCharacters
@@ -107,6 +109,8 @@ export function useNarratorAgent(
   const pendingConnectRef = useRef(false)
   const mountedRef = useRef(true)
   const prepareNextPageAbortRef = useRef<AbortController | null>(null)
+  const prepareNextPageInFlightRef = useRef(false)
+  const prepareNextPagePendingIdsRef = useRef<string[]>([])
   const audioSamplesQueuedRef = useRef(0)
   const audioTurnStartMsRef = useRef(0)
   const audioTurnStartedRef = useRef(false)
@@ -125,6 +129,9 @@ export function useNarratorAgent(
     handleTurnNarratorRef.current = null
     prepareNextPageAbortRef.current?.abort()
     prepareNextPageAbortRef.current = null
+    prepareNextPageInFlightRef.current = false
+    prepareNextPagePendingIdsRef.current = []
+    nextPageDataRef.current = null
     audioSamplesQueuedRef.current = 0
     audioTurnStartedRef.current = false
     modelTurnActiveRef.current = false
@@ -340,10 +347,20 @@ export function useNarratorAgent(
             if (message.toolCall?.functionCalls?.length) {
               for (const fc of message.toolCall.functionCalls) {
                 if (fc.name === "prepare_next_page" && fc.id) {
-                  prepareNextPageAbortRef.current?.abort()
+                  const callId = fc.id
+
+                  // If a request is already in flight, queue this call ID —
+                  // it will receive the same response when the current request finishes.
+                  if (prepareNextPageInFlightRef.current) {
+                    prepareNextPagePendingIdsRef.current.push(callId)
+                    return
+                  }
+
+                  prepareNextPageInFlightRef.current = true
+                  prepareNextPagePendingIdsRef.current = [callId]
+
                   const controller = new AbortController()
                   prepareNextPageAbortRef.current = controller
-                  const callId = fc.id
                   const pageToUse = currentPageRef.current
                   const transcriptForApi = liveTranscriptRef.current
                     .map(
@@ -351,6 +368,39 @@ export function useNarratorAgent(
                         `${e.role === "user" ? "You" : "Agent"}: ${e.text}`,
                     )
                     .join("\n\n")
+
+                  const respondToAllPending = (isReady: boolean) => {
+                    const ids = prepareNextPagePendingIdsRef.current
+                    prepareNextPagePendingIdsRef.current = []
+                    prepareNextPageInFlightRef.current = false
+                    prepareNextPageAbortRef.current = null
+                    if (ids.length === 0) return
+                    const baseResponse = isReady
+                      ? { result: "ok" }
+                      : { result: "ended" }
+                    // Batch all responses in one call. Only the first ID uses
+                    // WHEN_IDLE (triggers one model generation); duplicates rely
+                    // on default scheduling so they don't create extra speech.
+                    sessionRef.current?.sendToolResponse({
+                      functionResponses: ids.map((id, index) =>
+                        index === 0
+                          ? {
+                              id,
+                              name: "prepare_next_page",
+                              response: {
+                                ...baseResponse,
+                                scheduling:
+                                  FunctionResponseScheduling.WHEN_IDLE,
+                              },
+                            }
+                          : {
+                              id,
+                              name: "prepare_next_page",
+                              response: baseResponse,
+                            },
+                      ),
+                    })
+                  }
 
                   fetch("/api/prepare-next-page", {
                     method: "POST",
@@ -379,7 +429,7 @@ export function useNarratorAgent(
                           ? data.nextShortPlot
                           : ""
                       if (shortPlot) {
-                        setNextPage({
+                        const nextPageContent: PageContent = {
                           shortPlot,
                           coverImageBase64:
                             typeof data.nextCoverImageBase64 === "string"
@@ -389,7 +439,9 @@ export function useNarratorAgent(
                             typeof data.nextCoverImageMimeType === "string"
                               ? data.nextCoverImageMimeType
                               : undefined,
-                        })
+                        }
+                        nextPageDataRef.current = nextPageContent
+                        setNextPage(nextPageContent)
                         setNextPageReady(true)
                       }
                       const updates = Array.isArray(data.characterUpdates)
@@ -410,50 +462,43 @@ export function useNarratorAgent(
                         setCurrentCharacters(merged)
                         setCurrentIllustrationStyle(newStyle)
                       }
-                      sessionRef.current?.sendToolResponse({
-                        functionResponses: [
-                          {
-                            id: callId,
-                            name: "prepare_next_page",
-                            response: shortPlot
-                              ? { status: "next_page_ready", plot: shortPlot }
-                              : { status: "ended" },
-                            scheduling: FunctionResponseScheduling.SILENT,
-                          },
-                        ],
-                      })
+                      respondToAllPending(!!shortPlot)
                     })
                     .catch(() => {
+                      // Don't send responses if aborted by disconnect (session is gone)
+                      if (controller.signal.aborted) return
                       if (!mountedRef.current) return
-                      sessionRef.current?.sendToolResponse({
-                        functionResponses: [
-                          {
-                            id: callId,
-                            name: "prepare_next_page",
-                            response: { status: "ended" },
-                            scheduling: FunctionResponseScheduling.WHEN_IDLE,
-                          },
-                        ],
-                      })
+                      respondToAllPending(false)
                     })
                 } else if (fc.name === "show_next_page" && fc.id) {
-                  console.log("=============show next page====================")
-                  const nextPageData = nextPageRef.current
+                  const nextPageData = nextPageDataRef.current
                   if (nextPageData) {
+                    nextPageDataRef.current = null
+                    // Update ref synchronously so the next prepare_next_page call
+                    // sees the correct current page even before React re-renders.
+                    currentPageRef.current = nextPageData
                     setCurrentPage(nextPageData)
                     setNextPage(null)
                     setNextPageReady(false)
                   }
                   sessionRef.current?.sendToolResponse({
                     functionResponses: [
-                      {
-                        id: fc.id,
-                        name: "show_next_page",
-                        response: nextPageData
-                          ? { status: "ok" }
-                          : { status: "no_page_ready" },
-                        scheduling: FunctionResponseScheduling.SILENT,
-                      },
+                      nextPageData
+                        ? {
+                            id: fc.id,
+                            name: "show_next_page",
+                            response: {
+                              result: "ok",
+                              scheduling: FunctionResponseScheduling.WHEN_IDLE,
+                            },
+                          }
+                        : {
+                            id: fc.id,
+                            name: "show_next_page",
+                            response: {
+                              result: "no_page_ready",
+                            },
+                          },
                     ],
                   })
                 }

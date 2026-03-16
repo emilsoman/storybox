@@ -231,7 +231,7 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
             result: "ok",
             plot: prepareResult.shortPlot,
           } as Record<string, unknown>,
-          scheduling: FunctionResponseScheduling.SILENT,
+          scheduling: FunctionResponseScheduling.WHEN_IDLE,
         }))
         session.sendToolResponse({ functionResponses })
         // Navigation happens when farewell turnComplete arrives.
@@ -294,7 +294,10 @@ export function useStorySetupAgent(): UseStorySetupAgentReturn {
             ) {
               runStartStoryTransitionRef.current?.(message.toolCall)
             }
-            if (message.serverContent?.turnComplete && startStoryHandledRef.current) {
+            if (
+              message.serverContent?.turnComplete &&
+              startStoryHandledRef.current
+            ) {
               farewellTurnArrivedRef.current = true
             }
             if (message.serverContent?.turnComplete) {

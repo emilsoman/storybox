@@ -261,14 +261,14 @@ export function NarratorRightPanel({ currentPage }: NarratorViewProps) {
   const pageKey = `${currentPage.shortPlot.slice(0, 80)}-${currentPage.coverImageBase64?.slice(0, 20) ?? "no-img"}`
 
   return (
-    <div className="relative w-full flex-1 min-h-0 min-w-0 rounded-lg overflow-hidden bg-muted/50">
+    <div className="relative w-full flex-1 min-h-0 min-w-0 overflow-hidden flex items-center justify-center">
       {coverImageDataUrl ? (
         <img
           key={pageKey}
           src={coverImageDataUrl}
           alt="Story page"
           className={cn(
-            "absolute inset-0 w-full h-full object-cover",
+            "max-w-full max-h-full object-contain",
             "animate-in fade-in duration-300",
           )}
         />

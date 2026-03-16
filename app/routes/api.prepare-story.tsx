@@ -14,12 +14,11 @@ const VALID_VOICE_NAMES_LIST = VOICE_NAMES_WITH_TONES.split(", ")
   .map((s) => s.split(" -- ")[0].trim())
   .join(", ")
 
-const PREPARE_STORY_PROMPT = `You are preparing a kids' storybook session. Given the story setup below, output a JSON object with exactly these four keys (no other text, no markdown code fence):
+const PREPARE_STORY_PROMPT = `You are preparing a kids' storybook session. Given the story setup below, output a JSON object with exactly these three keys (no other text, no markdown code fence):
 
-1. "shortPlot": A short plot summary in 2-4 sentences that a narrator will use as the story outline. This should have all the details about the main characters in the story if there are any.
+1. "shortPlot": A 2-4 sentence outline of the ENTIRE story arc (beginning, middle, and end) that a narrator will use as a guide across multiple pages. Include the main characters, the central conflict or adventure, and how it resolves. Do not write this as a single scene — it should cover the full story from start to finish.
 2. "voiceName": The narrator voice. You must use exactly one of these names (the first word from each option): ${VALID_VOICE_NAMES_LIST}. To choose, use the tone hints: ${VOICE_NAMES_WITH_TONES}. Example: for an excitable story use "Fenrir", not "Excitable".
 3. "characters": An array of strings. Each string is a full character description (name and any physical/visual details) for consistent image generation across pages. Example: ["Luma, 9, short curly black hair, large green eyes, yellow raincoat and red boots, soft watercolor style", "A friendly dragon with emerald scales"]. Use an empty array [] if there are no specific characters.
-4. "illustrationStyle": A short string describing the illustration style for all pages (e.g. "soft watercolor children's book illustration"). This will be used for every page image.
 
 Output only the JSON object, nothing else.`
 
@@ -45,10 +44,8 @@ function parsePrepareStoryResponse(text: string): {
       typeof parsed === "object" &&
       "shortPlot" in parsed &&
       "voiceName" in parsed &&
-      "characters" in parsed &&
-      "illustrationStyle" in parsed
+      "characters" in parsed
     ) {
-      console.log("voice is", parsed.voiceName)
       const shortPlot =
         typeof (parsed as { shortPlot: unknown }).shortPlot === "string"
           ? (parsed as { shortPlot: string }).shortPlot
@@ -61,17 +58,11 @@ function parsePrepareStoryResponse(text: string): {
       const characters = Array.isArray(rawChars)
         ? rawChars.filter((x): x is string => typeof x === "string")
         : []
-      const rawStyle = (parsed as { illustrationStyle: unknown })
-        .illustrationStyle
-      const illustrationStyle =
-        typeof rawStyle === "string" && rawStyle.trim()
-          ? rawStyle.trim()
-          : DEFAULT_GLOBAL_ILLUSTRATION_STYLE
       return {
         shortPlot,
         voiceName,
         characters,
-        illustrationStyle,
+        illustrationStyle: DEFAULT_GLOBAL_ILLUSTRATION_STYLE,
       }
     }
   } catch {

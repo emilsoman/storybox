@@ -74,7 +74,7 @@ export type TranscriptEntry = { role: "user" | "agent"; text: string }
 
 /** Default global style for illustration prompts. */
 export const DEFAULT_GLOBAL_ILLUSTRATION_STYLE =
-  "children's book illustration, soft watercolor style"
+  "Soft watercolor illustration for a children's book, gentle pastel colors, simple whimsical characters and scenery, hand-painted texture, light brush strokes, storybook style, lots of negative space, edges softly fading and dissolving into a pure white background, dreamy and warm, minimal outlines, high-quality watercolor paper texture, calm and friendly mood."
 
 /**
  * Builds the illustration style prefix: base style + character descriptions (no scene).
